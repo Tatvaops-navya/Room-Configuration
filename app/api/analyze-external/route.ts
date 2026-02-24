@@ -77,6 +77,24 @@ function normalizeMimeType(mimeType: string): string {
   return 'image/jpeg'
 }
 
+function extractJsonArray(str: string): string | null {
+  if (!str || typeof str !== 'string') return null
+  let cleaned = str
+  const codeBlockMatch = cleaned.match(/```\s*json?\s*\n?([\s\S]*?)```/i)
+  if (codeBlockMatch) {
+    cleaned = codeBlockMatch[1].trim()
+  } else {
+    cleaned = cleaned.replace(/^\s*```\s*json?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim()
+  }
+  const firstBracket = cleaned.indexOf('[')
+  const lastBracket = cleaned.lastIndexOf(']')
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    cleaned = cleaned.slice(firstBracket, lastBracket + 1)
+    if (cleaned.startsWith('[') && cleaned.endsWith(']')) return cleaned
+  }
+  return null
+}
+
 export async function POST(request: NextRequest) {
   let body: { images?: unknown }
   try {
@@ -171,24 +189,6 @@ export async function POST(request: NextRequest) {
       fullReport = rawText.slice(0, markerIndex).trim()
       const afterMarker = rawText.slice(markerIndex + componentsJsonMarker.length).trim()
       jsonSection = afterMarker
-    }
-
-    function extractJsonArray(str: string): string | null {
-      if (!str || typeof str !== 'string') return null
-      let cleaned = str
-      const codeBlockMatch = cleaned.match(/```\s*json?\s*\n?([\s\S]*?)```/i)
-      if (codeBlockMatch) {
-        cleaned = codeBlockMatch[1].trim()
-      } else {
-        cleaned = cleaned.replace(/^\s*```\s*json?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim()
-      }
-      const firstBracket = cleaned.indexOf('[')
-      const lastBracket = cleaned.lastIndexOf(']')
-      if (firstBracket !== -1 && lastBracket > firstBracket) {
-        cleaned = cleaned.slice(firstBracket, lastBracket + 1)
-        if (cleaned.startsWith('[') && cleaned.endsWith(']')) return cleaned
-      }
-      return null
     }
 
     let parsed: { id: string; label: string }[] | null = null

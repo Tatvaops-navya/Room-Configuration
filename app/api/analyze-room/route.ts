@@ -227,7 +227,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Extract JSON array (from jsonSection or whole response)
-    function extractJsonArray(str: string): string | null {
+    const extractJsonArray = (str: string): string | null => {
       if (!str || typeof str !== 'string') return null
       let cleaned = str
       const codeBlockMatch = cleaned.match(/```\s*json?\s*\n?([\s\S]*?)```/i)
