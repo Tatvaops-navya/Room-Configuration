@@ -457,6 +457,9 @@ function generatePlaceholderImage(images: string[], prompt: string): string {
   return placeholderImage
 }
 
+/** Vercel: allow up to 60s for AI image generation (Pro plan). Hobby plan caps at 10s. */
+export const maxDuration = 60
+
 /**
  * POST handler for image generation
  */

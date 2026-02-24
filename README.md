@@ -45,3 +45,11 @@ See `API_KEY_SETUP.md` for detailed instructions.
 3. Without image generation API keys, the system will analyze and log changes but return the original image
 
 The system is fully implemented and ready to generate modified images once you add an image generation API key!
+
+## Deploy on Vercel
+
+This project is **Vercel-ready**. See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for:
+
+- One-click deploy from GitHub
+- Required environment variables (`IMAGE_GENERATION_API_KEY`, etc.)
+- Function timeout notes (Pro plan recommended for image generation)
