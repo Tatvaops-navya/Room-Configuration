@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Agent } from 'undici'
 import { buildPrompt, buildPromptSummary } from '@/app/utils/promptBuilder'
 
 /** Timeouts for Gemini API (ms). Image generation can take 60–120+ seconds. */
@@ -17,9 +16,12 @@ function isRetryableNetworkError(err: unknown): boolean {
       msg.includes('fetch failed') ||
       msg.includes('Headers Timeout') ||
       msg.includes('UND_ERR_HEADERS_TIMEOUT') ||
+      msg.includes('aborted') ||
+      msg.includes('The operation was aborted') ||
       code === 'ECONNRESET' ||
       code === 'ETIMEDOUT' ||
-      code === 'ECONNREFUSED'
+      code === 'ECONNREFUSED' ||
+      code === 'ABORT_ERR'
     )
   }
   return false
@@ -30,19 +32,19 @@ async function fetchGemini(
   options: RequestInit & { body: string },
   timeoutMs: number
 ): Promise<Response> {
-  const dispatcher = new Agent({
-    headersTimeout: timeoutMs,
-    bodyTimeout: timeoutMs,
-  })
   let lastError: unknown
   for (let attempt = 0; attempt <= GEMINI_RETRY_ATTEMPTS; attempt++) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const res = await fetch(url, {
         ...options,
-        dispatcher,
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
       return res
     } catch (err) {
+      clearTimeout(timeoutId)
       lastError = err
       if (attempt < GEMINI_RETRY_ATTEMPTS && isRetryableNetworkError(err)) {
         console.warn(`Gemini request attempt ${attempt + 1} failed (${err instanceof Error ? err.message : err}). Retrying in ${GEMINI_RETRY_DELAY_MS}ms...`)
