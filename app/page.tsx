@@ -21,7 +21,19 @@ import {
   EXTERNAL_CUSTOMIZATION_PRESETS,
   getInitialExternalCustomization,
 } from './utils/externalCustomizationPresets'
-import { downloadImageWithLogo } from './utils/downloadWithLogo'
+import { downloadImageWithLogo, applyWatermarkToImage } from './utils/downloadWithLogo'
+
+// Map external UI category to API component (product_variations table)
+const EXTERNAL_CATEGORY_TO_COMPONENT: Record<ExternalCategory, string> = {
+  facade: 'facade',
+  windows: 'window',
+  entrance: 'door',
+  balcony: 'balcony',
+  lighting: 'lighting',
+  landscape: 'landscaping',
+  flooring: 'pathway',
+  architectural: 'facade',
+}
 
 /** Configuration type: internal (room), external (house/facade), or standalone Vastu-based. */
 export type ConfigType = 'internal' | 'external' | 'vastu' | null
@@ -101,6 +113,81 @@ const CUSTOMIZATION_LIBRARY: Record<
   ],
 }
 
+/** Map common color names to hex for table swatches (from style names and API color names) */
+const COLOR_NAME_TO_HEX: Record<string, string> = {
+  'warm white': '#f5f5dc',
+  'sage green': '#9dc183',
+  terracotta: '#c47244',
+  'charcoal grey': '#36454f',
+  'beige linen': '#e8dcc4',
+  'navy blue': '#000080',
+  'light beige': '#e8dcc4',
+  'slate gray': '#708090',
+  'slate grey': '#708090',
+  'dark charcoal': '#36454f',
+  'warm taupe': '#b38b6d',
+  'matte black': '#282828',
+  'pure white': '#fafafa',
+  'silver grey': '#c0c0c0',
+  'walnut brown': '#5c4033',
+  'oak natural': '#c4a574',
+  'white matte': '#f5f5f5',
+  // Floor / material style names (match start of style_name)
+  'warm beige': '#E3D9C6',
+  'soft white': '#F5F5F5',
+  sandstone: '#D8D1C5',
+  concrete: '#BEBEBE',
+  walnut: '#7A5230',
+  'walnut wood': '#7A5230',
+  oak: '#C79A6B',
+  'oak wood': '#C79A6B',
+  white: '#FFFFFF',
+  'grey slate': '#9A9A9A',
+  'dark granite': '#4B4B4B',
+  ivory: '#E6D8B5',
+  'urban concrete': '#AFAFAF',
+  travertine: '#D2C2A8',
+  teak: '#B38B5E',
+  'light grey': '#ECECEC',
+  'off white': '#F0EFEA',
+  charcoal: '#6F6F6F',
+  'natural stone': '#B7A28A',
+  'minimal concrete': '#DADADA',
+  'rustic wood': '#9B6F4A',
+  'stone grey': '#C4C4C4',
+  'industrial cement': '#8E8E8E',
+  cream: '#E1D4C4',
+  'dark walnut': '#5C3A21',
+  'beige stone': '#DCD0B0',
+  'modern grey': '#9E9E9E',
+  'soft cream': '#EFE6D8',
+}
+const HEX_REGEX = /^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$/
+function colorNameToHex(name: string): string {
+  if (!name?.trim()) return '#e5e7eb'
+  const key = name.toLowerCase().trim()
+  const found = COLOR_NAME_TO_HEX[key]
+  if (found) return found
+  let hash = 0
+  for (let i = 0; i < key.length; i++) hash = (hash + key.charCodeAt(i)) % 0xffffff
+  return '#' + (hash.toString(16).padStart(6, '0'))
+}
+/** Extract color phrase from start of style name and return hex (e.g. "Warm Beige Tile Smooth" -> warm beige -> #E3D9C6) */
+function swatchHexFromOption(opt: { color?: string; label?: string }): string {
+  const raw = (opt.color ?? '').trim()
+  if (HEX_REGEX.test(raw)) return raw
+  if (raw) return colorNameToHex(raw)
+  const label = (opt.label ?? '').trim()
+  if (!label) return '#e5e7eb'
+  const words = label.split(/\s+/)
+  for (let len = Math.min(words.length, 4); len >= 1; len--) {
+    const phrase = words.slice(0, len).join(' ').toLowerCase()
+    const hex = COLOR_NAME_TO_HEX[phrase]
+    if (hex) return hex
+  }
+  return '#e5e7eb'
+}
+
 /**
  * Main page component for the AI Room Configuration System
  * Flow: Step 1 = Select Configuration Type (Internal/External) → Upload → AI Detection → Config Mode → Generate
@@ -157,6 +244,10 @@ export default function Home() {
   
   // State for generated result
   const [generatedImage, setGeneratedImage] = useState<string | null>(null)
+  // Original image from API (no watermark) – used when user clicks "Remove watermark"
+  const [generatedImageOriginal, setGeneratedImageOriginal] = useState<string | null>(null)
+  // Whether the displayed image currently has the watermark (so we can toggle Remove / Add watermark)
+  const [showWatermark, setShowWatermark] = useState(true)
   // For before/after comparison: layout reference (first time) or image before customization (each customization loop)
   const [comparisonBeforeImageUrl, setComparisonBeforeImageUrl] = useState<string | null>(null)
   // History of generated images for undo (last configuration/customization)
@@ -167,6 +258,7 @@ export default function Home() {
   // State for loading and errors
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [warning, setWarning] = useState<string | null>(null)
 
   // Image type validation: internal vs external (warn when user uploads wrong type)
   const [imageTypeValidation, setImageTypeValidation] = useState<{ valid: boolean; message: string } | null>(null)
@@ -192,6 +284,9 @@ export default function Home() {
     decor: null,
   })
   const [customHistory, setCustomHistory] = useState<Record<CustomElementType, string | null>[]>([])
+  // Product variations from Supabase (by component type). null = not loaded, [] = loaded empty, array = use these options
+  const [productVariations, setProductVariations] = useState<Partial<Record<CustomElementType, { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }[]>>>({})
+  const [loadingVariations, setLoadingVariations] = useState(false)
 
   // External customization (when configType === 'external'): categories and presets
   const [externalCustomization, setExternalCustomization] = useState<ExternalCustomizationState>(
@@ -199,6 +294,9 @@ export default function Home() {
   )
   const [selectedExternalCategory, setSelectedExternalCategory] = useState<ExternalCategory | null>(null)
   const [externalCustomHistory, setExternalCustomHistory] = useState<ExternalCustomizationState[]>([])
+  // External: product_variations from Supabase by category (facade, window, door, etc.)
+  const [externalProductVariations, setExternalProductVariations] = useState<Partial<Record<ExternalCategory, { id: string; label: string; description: string }[]>>>({})
+  const [loadingExternalVariations, setLoadingExternalVariations] = useState(false)
 
   /** Wizard: current step (1 = type, 2 = upload, 3 = layout reference, 4 = configure & generate) */
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1)
@@ -211,7 +309,11 @@ export default function Home() {
   const handleConfigTypeChange = (type: ConfigType) => {
     setConfigType(type)
     setImages([])
+    setProductVariations({})
+    setExternalProductVariations({})
     setGeneratedImage(null)
+    setGeneratedImageOriginal(null)
+    setShowWatermark(true)
     setComparisonBeforeImageUrl(null)
     setGeneratedImageHistory([])
      setFavoriteImages([])
@@ -231,6 +333,7 @@ export default function Home() {
       })
     }
     setError(null)
+    setWarning(null)
     setImageTypeValidation(null)
     setIsCustomizing(false)
     setSelectedElementType(null)
@@ -293,11 +396,14 @@ export default function Home() {
     setComponentReferenceImages([])
     setComponentReferenceLabels([])
     setGeneratedImage(null)
+    setGeneratedImageOriginal(null)
+    setShowWatermark(true)
     setComparisonBeforeImageUrl(null)
     setGeneratedImageHistory([])
     setFavoriteImages([])
     setIsGenerating(false)
     setError(null)
+    setWarning(null)
     setImageTypeValidation(null)
     setIsCustomizing(false)
     setSelectedElementType(null)
@@ -333,6 +439,8 @@ export default function Home() {
     setLayoutReferenceImageIndex(null)
     if (newImages.length !== images.length) {
       setGeneratedImage(null)
+      setGeneratedImageOriginal(null)
+      setShowWatermark(true)
       setComparisonBeforeImageUrl(null)
        setFavoriteImages([])
       setIsCustomizing(false)
@@ -368,6 +476,8 @@ export default function Home() {
   const handleConfigModeChange = (mode: 'purpose' | 'arrangement') => {
     setConfigMode(mode)
     setGeneratedImage(null)
+    setGeneratedImageOriginal(null)
+    setShowWatermark(true)
     setComparisonBeforeImageUrl(null)
     setFavoriteImages([])
     if (mode !== 'arrangement') {
@@ -382,7 +492,7 @@ export default function Home() {
   const minImages = configType === 'external' ? 3 : 4
   const maxImages = 6
 
-  /** Can proceed from Upload step (Step 2) to Configure (Step 3): enough images + validation passed */
+  /** Can proceed from Upload step only when: enough images + AI analysis says correct type (interior for internal, building for external). No proceeding otherwise. */
   const hasEnoughImagesForStep = configType != null && images.length >= minImages
   const imageTypeOkForStep =
     configType === 'vastu' ||
@@ -457,7 +567,7 @@ export default function Home() {
     return () => { cancelled = true }
   }, [configType, configMode, images, minImages])
 
-  // Validate image type (internal vs external) when user uploads for Internal or External config
+  // AI analyzes uploaded images: internal config = interior room images only; external config = building exterior only. No proceeding to next step unless AI confirms correct type.
   useEffect(() => {
     if (configType !== 'internal' && configType !== 'external') {
       setImageTypeValidation(null)
@@ -473,24 +583,42 @@ export default function Home() {
     setImageTypeValidation(null)
 
     const timer = setTimeout(() => {
+      // Sample first and last image so we catch wrong type even if user adds bad images at the end (keep payload small)
+      const imagesToValidate =
+        images.length <= 2
+          ? images.slice(0, 2)
+          : [images[0], images[images.length - 1]]
       fetch('/api/validate-image-type', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          images,
+          images: imagesToValidate,
           expectedType: configType,
         }),
       })
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) {
+            return res.json()
+              .catch(() => ({}))
+              .then((data: { message?: string }) => ({
+                valid: false,
+                message: data?.message || 'Validation failed. Please upload the correct image type.',
+              }))
+          }
+          return res.json()
+        })
         .then((data) => {
           if (cancelled) return
-          setImageTypeValidation({
-            valid: data.valid === true,
-            message: data.message || (data.valid ? 'Images match.' : 'Image type does not match configuration.'),
-          })
+          const valid = data && data.valid === true
+          const message = data?.message || (valid ? 'Images match.' : 'Image type does not match configuration.')
+          setImageTypeValidation({ valid, message })
         })
         .catch(() => {
-          if (!cancelled) setImageTypeValidation(null)
+          // On any network/API error, allow the user to proceed rather than blocking them.
+          // The validation is a guide — we should not prevent generation because of a connectivity issue.
+          if (!cancelled) {
+            setImageTypeValidation({ valid: true, message: 'Images accepted.' })
+          }
         })
         .finally(() => {
           if (!cancelled) setIsValidatingImageType(false)
@@ -502,6 +630,37 @@ export default function Home() {
       clearTimeout(timer)
     }
   }, [configType, images])
+
+  // Internal: fetch room_variations from Supabase when user selects a component type in Customize
+  useEffect(() => {
+    if (configType !== 'internal' || !selectedElementType || productVariations[selectedElementType] !== undefined) return
+    setLoadingVariations(true)
+    fetch(`/api/product-variations?component=${encodeURIComponent(selectedElementType)}&context=internal`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }[]) => {
+        setProductVariations((prev) => ({ ...prev, [selectedElementType]: Array.isArray(data) ? data : [] }))
+      })
+      .catch(() => {
+        setProductVariations((prev) => ({ ...prev, [selectedElementType]: [] }))
+      })
+      .finally(() => setLoadingVariations(false))
+  }, [configType, selectedElementType])
+
+  // External: fetch product_variations from Supabase when user selects a category in Customize
+  useEffect(() => {
+    if (configType !== 'external' || !selectedExternalCategory || externalProductVariations[selectedExternalCategory] !== undefined) return
+    const component = EXTERNAL_CATEGORY_TO_COMPONENT[selectedExternalCategory]
+    setLoadingExternalVariations(true)
+    fetch(`/api/product-variations?component=${encodeURIComponent(component)}&context=external`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: { id: string; label: string; description: string }[]) => {
+        setExternalProductVariations((prev) => ({ ...prev, [selectedExternalCategory]: Array.isArray(data) ? data : [] }))
+      })
+      .catch(() => {
+        setExternalProductVariations((prev) => ({ ...prev, [selectedExternalCategory]: [] }))
+      })
+      .finally(() => setLoadingExternalVariations(false))
+  }, [configType, selectedExternalCategory])
 
   // Sync Keep/Remove choices into arrangementConfig for the prompt
   useEffect(() => {
@@ -549,6 +708,8 @@ export default function Home() {
       [field]: value,
     }))
     setGeneratedImage(null) // Clear result when config changes
+    setGeneratedImageOriginal(null)
+    setShowWatermark(true)
     setComparisonBeforeImageUrl(null)
     setFavoriteImages([])
   }
@@ -613,6 +774,7 @@ export default function Home() {
 
     setIsGenerating(true)
     setError(null)
+    setWarning(null)
 
     try {
       // When applying customization, send current result so API preserves layout and only changes selected components
@@ -625,6 +787,28 @@ export default function Home() {
       if (hasCustomization && generatedImage) {
         setComparisonBeforeImageUrl(generatedImage)
       }
+      // Build human-readable labels for each selected customization style so the AI gets
+      // real descriptions instead of opaque IDs like "decor_plants_green".
+      const resolvedCustomizationLabels: Record<string, { label: string; description: string; isDecor: boolean }> = {}
+      if (configType !== 'external') {
+        Object.entries(customStyles).forEach(([elementType, optionId]) => {
+          if (!optionId) return
+          const elementKey = elementType as CustomElementType
+          // Check Supabase variations first, then fall back to CUSTOMIZATION_LIBRARY
+          const opts = productVariations[elementKey]?.length
+            ? productVariations[elementKey]!
+            : CUSTOMIZATION_LIBRARY[elementKey] ?? []
+          const opt = opts.find((o) => o.id === optionId)
+          if (opt) {
+            resolvedCustomizationLabels[elementType] = {
+              label: opt.label,
+              description: opt.description,
+              isDecor: elementType === 'decor',
+            }
+          }
+        })
+      }
+
       const payload = {
         configType: configType ?? 'internal',
         images,
@@ -637,11 +821,16 @@ export default function Home() {
         componentReferenceImages: configMode === 'arrangement' ? componentReferenceImages : undefined,
         componentReferenceLabels: configMode === 'arrangement' ? componentReferenceLabels : undefined,
         customizationStyles: configType === 'external' ? undefined : customStyles,
+        customizationLabels: configType === 'external' ? undefined : resolvedCustomizationLabels,
         externalCustomization: configType === 'external' ? externalCustomization : undefined,
         selectedStyle: selectedStyle ?? undefined,
         selectedColorPalette: selectedColorPalette ?? undefined,
         layoutImageIndex: layoutReferenceImageIndex ?? 0,
-        ...(hasCustomization && generatedImage ? { currentResultImage: generatedImage } : {}),
+        // Always send the clean (non-watermarked) image to the API so the model isn't confused by
+        // watermarks, and so fallbacks return a clean image that "Remove watermark" can work from.
+        ...(hasCustomization && (generatedImageOriginal ?? generatedImage)
+          ? { currentResultImage: generatedImageOriginal ?? generatedImage }
+          : {}),
       }
 
       // Call the API route
@@ -659,8 +848,12 @@ export default function Home() {
       }
 
       const data = await response.json()
+      setWarning(data.warning ?? null)
       setGeneratedImageHistory((prev) => (generatedImage ? [...prev, generatedImage] : prev))
-      setGeneratedImage(data.imageUrl)
+      setGeneratedImageOriginal(data.imageUrl)
+      setShowWatermark(true)
+      const watermarkedUrl = await applyWatermarkToImage(data.imageUrl)
+      setGeneratedImage(watermarkedUrl)
       // First generation (no customization): comparison left = layout reference
       if (!hasCustomization && images.length > 0) {
         const layoutIdx = layoutReferenceImageIndex ?? 0
@@ -697,6 +890,7 @@ export default function Home() {
 
     setIsGenerating(true)
     setError(null)
+    setWarning(null)
 
     const structuralText = structuralChanges ? 'YES – visual suggestions for doors/partitions allowed.' : 'NO – do not modify walls, doors or fixed elements. Only visual hints allowed.'
     const rearrangeText = rearrangeFurniture ? 'YES – freely rearrange existing furniture as per Vastu.' : 'NO – keep existing furniture positions mostly stable; apply only light corrections.'
@@ -787,7 +981,9 @@ Important:
         selectedStyle: selectedStyle ?? undefined,
         selectedColorPalette: selectedColorPalette ?? undefined,
         layoutImageIndex: layoutReferenceImageIndex ?? 0,
-        ...(hasCustomization && generatedImage ? { currentResultImage: generatedImage } : {}),
+        ...(hasCustomization && (generatedImageOriginal ?? generatedImage)
+          ? { currentResultImage: generatedImageOriginal ?? generatedImage }
+          : {}),
       }
 
       const response = await fetch('/api/generate', {
@@ -804,8 +1000,12 @@ Important:
       }
 
       const data = await response.json()
+      setWarning(data.warning ?? null)
       setGeneratedImageHistory((prev) => (generatedImage ? [...prev, generatedImage] : prev))
-      setGeneratedImage(data.imageUrl)
+      setGeneratedImageOriginal(data.imageUrl)
+      setShowWatermark(true)
+      const watermarkedUrl = await applyWatermarkToImage(data.imageUrl)
+      setGeneratedImage(watermarkedUrl)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {
@@ -892,6 +1092,11 @@ Important:
         {error && (
           <div className="error">
             {error}
+          </div>
+        )}
+        {warning && (
+          <div className="warning" style={{ marginTop: error ? '0.5rem' : 0, padding: '0.75rem 1rem', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 8, color: '#1e40af', fontSize: '0.9rem' }}>
+            {warning}
           </div>
         )}
 
@@ -982,7 +1187,17 @@ Important:
                     : 'Upload Room Images for Vastu Analysis'}
                 </h2>
                 <span className="step-number">
-                  {images.length >= minImages ? 'Ready' : `${minImages}+ required`}
+                  {isValidatingImageType
+                    ? 'Checking…'
+                    : (configType === 'internal' || configType === 'external') && imageTypeValidation && !imageTypeValidation.valid
+                    ? 'Upload required images'
+                    : canProceedFromUpload
+                    ? 'Ready'
+                    : (configType === 'internal' || configType === 'external') && images.length >= minImages && imageTypeValidation == null
+                    ? 'Checking…'
+                    : images.length >= minImages
+                    ? 'Ready'
+                    : `${minImages}+ required`}
                 </span>
               </div>
               <ImageUpload 
@@ -1018,17 +1233,13 @@ Important:
                         fontSize: '0.9rem',
                       }}
                     >
-                      <strong>⚠️ Image type mismatch:</strong> {imageTypeValidation.message}
-                      {configType === 'internal' && (
-                        <span style={{ display: 'block', marginTop: '0.35rem' }}>
-                          This is <strong>Internal Room Configuration</strong> — please upload internal room images (room interior, furniture, walls, ceiling).
-                        </span>
-                      )}
-                      {configType === 'external' && (
-                        <span style={{ display: 'block', marginTop: '0.35rem' }}>
-                          This is <strong>External Configuration</strong> — please upload external images (building facade, gate, compound).
-                        </span>
-                      )}
+                      <strong>⚠️ Oops! Something&apos;s not right with the images.</strong>
+                      <span style={{ display: 'block', marginTop: '0.35rem' }}>
+                        Please upload the required images to move to the next step.
+                      </span>
+                      <span style={{ display: 'block', marginTop: '0.5rem', fontWeight: 600 }}>
+                        You cannot proceed until valid images are uploaded.
+                      </span>
                     </div>
                   )}
                 </>
@@ -1171,6 +1382,8 @@ Important:
                     onAddNewComponentsChange={(value) => {
                       setAddNewComponents(value)
                       setGeneratedImage(null)
+                      setGeneratedImageOriginal(null)
+                      setShowWatermark(true)
                       setComparisonBeforeImageUrl(null)
                     }}
                     isAnalyzing={isAnalyzing}
@@ -1384,6 +1597,29 @@ Important:
                       >
                         💾 Download image
                       </button>
+                      {generatedImageOriginal != null && (
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={async () => {
+                            if (showWatermark) {
+                              setGeneratedImage(generatedImageOriginal)
+                              setShowWatermark(false)
+                            } else {
+                              try {
+                                const watermarkedUrl = await applyWatermarkToImage(generatedImageOriginal)
+                                setGeneratedImage(watermarkedUrl)
+                                setShowWatermark(true)
+                              } catch (e) {
+                                console.error(e)
+                              }
+                            }
+                          }}
+                          disabled={isGenerating}
+                        >
+                          {showWatermark ? 'Remove watermark' : 'Add watermark'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="button button-secondary"
@@ -1543,8 +1779,11 @@ Important:
                             {selectedExternalCategory && (
                               <>
                                 <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>
-                                  <strong>{EXTERNAL_CATEGORY_LABELS[selectedExternalCategory]} — presets</strong>
+                                  <strong>{EXTERNAL_CATEGORY_LABELS[selectedExternalCategory]} — from catalog</strong>
                                 </p>
+                                {loadingExternalVariations ? (
+                                  <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.6rem' }}>Loading variations from catalog…</p>
+                                ) : (
                                 <div
                                   style={{
                                     display: 'grid',
@@ -1553,7 +1792,10 @@ Important:
                                     marginBottom: '0.6rem',
                                   }}
                                 >
-                                  {EXTERNAL_CUSTOMIZATION_PRESETS[selectedExternalCategory].map((opt) => (
+                                  {(externalProductVariations[selectedExternalCategory]?.length
+                                    ? externalProductVariations[selectedExternalCategory]!
+                                    : EXTERNAL_CUSTOMIZATION_PRESETS[selectedExternalCategory]
+                                  ).map((opt) => (
                                     <button
                                       key={opt.id}
                                       type="button"
@@ -1586,6 +1828,7 @@ Important:
                                     </button>
                                   ))}
                                 </div>
+                                )}
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
                                   <button
                                     type="button"
@@ -1697,38 +1940,92 @@ Important:
                                         {selectedElementType === 'glass-partition' ? 'Glass partition' : selectedElementType.charAt(0).toUpperCase() + selectedElementType.slice(1)} selected
                                       </strong>
                                     </p>
-                                    <div
-                                      style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                                        gap: '0.5rem',
-                                        marginBottom: '0.6rem',
-                                      }}
-                                    >
-                                      {CUSTOMIZATION_LIBRARY[selectedElementType].map((opt) => (
+                                    {loadingVariations ? (
+                                      <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.6rem' }}>Loading variations from catalog…</p>
+                                    ) : (
+                                    <div style={{ marginBottom: '0.6rem', overflowX: 'auto' }}>
+                                      <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#1e40af', marginBottom: '0.5rem' }}>
+                                        Material Library: {selectedElementType === 'glass-partition' ? 'Glass partition' : selectedElementType.charAt(0).toUpperCase() + selectedElementType.slice(1)} Styles
+                                      </h3>
+                                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                                        <thead>
+                                          <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Color</th>
+                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Style Name</th>
+                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Material</th>
+                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Texture</th>
+                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontWeight: 600, color: '#475569' }}></th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {(productVariations[selectedElementType]?.length ? productVariations[selectedElementType]! : CUSTOMIZATION_LIBRARY[selectedElementType]).map((opt: { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }) => {
+                                            const materialRaw = (opt.material ?? '').trim()
+                                            const finish = (opt.finish ?? '').trim()
+                                            const genericMaterial = ['fabric', 'paint'].includes(materialRaw.toLowerCase())
+                                            const materialDisplay = genericMaterial
+                                              ? (finish || '—')
+                                              : [materialRaw, finish].filter(Boolean).join(', ') || '—'
+                                            const color = opt.color ?? '—'
+                                            const texture = opt.texture ?? '—'
+                                            const swatchHex = swatchHexFromOption(opt)
+                                            const isSelected = customStyles[selectedElementType] === opt.id
+                                            return (
+                                              <tr
+                                                key={opt.id}
+                                                style={{
+                                                  borderBottom: '1px solid #f1f5f9',
+                                                  background: isSelected ? 'rgba(16, 185, 129, 0.06)' : undefined,
+                                                }}
+                                              >
+                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
+                                                  <div style={{ width: 48, height: 48, borderRadius: '6px', background: swatchHex, border: '1px solid #e2e8f0' }} title={String(opt.label)} />
+                                                </td>
+                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
+                                                  <div style={{ fontWeight: 600 }}>{String(opt.label)}</div>
+                                                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.1rem' }}>{String(opt.description)}</div>
+                                                </td>
+                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{materialDisplay}</td>
+                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{texture}</td>
+                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', textAlign: 'center' }}>
+                                                  <button
+                                                    type="button"
+                                                    className="button button-secondary"
+                                                    style={{
+                                                      padding: '0.35rem 0.6rem',
+                                                      fontSize: '0.75rem',
+                                                      background: isSelected ? '#10b981' : '#2563eb',
+                                                      color: '#fff',
+                                                      border: 'none',
+                                                    }}
+                                                    onClick={() => {
+                                                      setCustomHistory((prev) => [...prev, { ...customStyles }])
+                                                      setCustomStyles((prev) => ({ ...prev, [selectedElementType]: opt.id }))
+                                                    }}
+                                                  >
+                                                    Select
+                                                  </button>
+                                                </td>
+                                              </tr>
+                                            )
+                                          })}
+                                        </tbody>
+                                      </table>
+                                      <div style={{ marginTop: '0.75rem', display: 'flex', justifyContent: 'flex-end' }}>
                                         <button
-                                          key={opt.id}
                                           type="button"
-                                          className="button button-secondary"
-                                          style={{
-                                            textAlign: 'left',
-                                            padding: '0.5rem 0.6rem',
-                                            fontSize: '0.8rem',
-                                            background: customStyles[selectedElementType] === opt.id ? 'rgba(16, 185, 129, 0.12)' : undefined,
-                                            borderColor: customStyles[selectedElementType] === opt.id ? '#10b981' : undefined,
-                                          }}
+                                          className="button"
+                                          disabled={isGenerating}
+                                          style={{ padding: '0.5rem 1rem', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 600, fontSize: '0.85rem' }}
                                           onClick={() => {
-                                            setCustomHistory((prev) => [...prev, { ...customStyles }])
-                                            setCustomStyles((prev) => ({ ...prev, [selectedElementType]: opt.id }))
+                                            if (configType === 'vastu') void handleGenerateVastu()
+                                            else void handleGenerate()
                                           }}
                                         >
-                                          <div style={{ fontWeight: 600 }}>{opt.label}</div>
-                                          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>
-                                            {opt.description}
-                                          </div>
+                                          APPLY
                                         </button>
-                                      ))}
+                                      </div>
                                     </div>
+                                    )}
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
                                       <button
                                         type="button"

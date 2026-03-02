@@ -12,6 +12,10 @@ const dmSans = DM_Sans({
 export const metadata: Metadata = {
   title: 'AI Room Configuration System',
   description: 'Generate realistic interior room images based on your preferences',
+  icons: {
+    icon: '/icon.svg',
+    shortcut: '/icon.svg',
+  },
 }
 
 export default function RootLayout({

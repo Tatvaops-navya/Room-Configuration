@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef } from 'react'
+import { compressImageFile } from '../utils/compressImage'
 
 /**
  * ImageUpload Component
@@ -26,19 +27,7 @@ export default function ImageUpload({ images, onImagesChange, minImages, maxImag
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   /**
-   * Convert file to base64 string for easy handling
-   */
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
-  }
-
-  /**
-   * Handle file selection
+   * Handle file selection – compresses large images so payloads stay within API limits
    */
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
@@ -55,23 +44,19 @@ export default function ImageUpload({ images, onImagesChange, minImages, maxImag
 
     try {
       const remainingSlots = maxImages - images.length
-
-      // Only take as many files as we have slots for
       const filesToUse = Array.from(files).slice(0, remainingSlots)
 
-      // Convert selected files to base64
+      // Compress/resize large images to avoid 413 Content Too Large from APIs
       const newImages = await Promise.all(
-        filesToUse.map(file => fileToBase64(file))
+        filesToUse.map((file) => compressImageFile(file))
       )
 
-      // Add new images to existing ones
       onImagesChange([...images, ...newImages])
     } catch (error) {
       console.error('Error reading files:', error)
       alert('Error reading image files. Please try again.')
     }
 
-    // Reset input to allow selecting same file again
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }

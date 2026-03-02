@@ -941,8 +941,8 @@ h3 {
 .before-after-handle-grip {
   position: relative;
   z-index: 1;
-  width: 40px;
-  height: 40px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   background: white;
   box-shadow: 0 2px 12px rgba(0,0,0,0.25);
@@ -953,7 +953,7 @@ h3 {
 }
 
 .before-after-handle-arrows {
-  font-size: 1rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: var(--color-text);
   letter-spacing: -0.2em;

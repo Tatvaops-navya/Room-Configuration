@@ -1,5 +1,84 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Agent } from 'undici'
 import { buildPrompt, buildPromptSummary } from '@/app/utils/promptBuilder'
+
+/** Timeouts for Gemini API (ms). Image generation can take 60–120+ seconds. */
+const GEMINI_TEXT_TIMEOUT_MS = 120_000
+const GEMINI_IMAGE_TIMEOUT_MS = 180_000
+const GEMINI_RETRY_ATTEMPTS = 2
+const GEMINI_RETRY_DELAY_MS = 3000
+
+function isRetryableNetworkError(err: unknown): boolean {
+  if (err instanceof Error) {
+    const msg = err.message
+    const cause = (err as Error & { cause?: { code?: string } }).cause
+    const code = cause?.code
+    return (
+      msg.includes('fetch failed') ||
+      msg.includes('Headers Timeout') ||
+      msg.includes('UND_ERR_HEADERS_TIMEOUT') ||
+      code === 'ECONNRESET' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNREFUSED'
+    )
+  }
+  return false
+}
+
+async function fetchGemini(
+  url: string,
+  options: RequestInit & { body: string },
+  timeoutMs: number
+): Promise<Response> {
+  const dispatcher = new Agent({
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
+  })
+  let lastError: unknown
+  for (let attempt = 0; attempt <= GEMINI_RETRY_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        dispatcher,
+      })
+      return res
+    } catch (err) {
+      lastError = err
+      if (attempt < GEMINI_RETRY_ATTEMPTS && isRetryableNetworkError(err)) {
+        console.warn(`Gemini request attempt ${attempt + 1} failed (${err instanceof Error ? err.message : err}). Retrying in ${GEMINI_RETRY_DELAY_MS}ms...`)
+        await new Promise((r) => setTimeout(r, GEMINI_RETRY_DELAY_MS))
+        continue
+      }
+      throw err
+    }
+  }
+  throw lastError
+}
+
+// --- Guardrails to avoid safety filters, model limits, and input size issues ---
+const DESIGN_CONTEXT_PREFIX =
+  'Context: Professional interior/exterior design and room configuration visualization. All content is for design purposes only.\n\n'
+
+/** Max characters for text sent to Gemini (avoids token/input limits and reduces filter risk). */
+const MAX_PROMPT_CHARS = 24000
+/** Max room images sent to the image model (reduces input size and improves reliability). */
+const MAX_ROOM_IMAGES_FOR_IMAGE_MODEL = 3
+/** Max component reference images sent to the image model. */
+const MAX_COMPONENT_IMAGES_FOR_IMAGE_MODEL = 3
+/** Max length for user-supplied text (e.g. fullRoomAdditionalText) to avoid oversized prompts. */
+const MAX_USER_TEXT_CHARS = 2000
+
+function capUserText(s: string | undefined): string {
+  if (!s?.trim()) return ''
+  return s.trim().length > MAX_USER_TEXT_CHARS ? s.trim().slice(0, MAX_USER_TEXT_CHARS) + ' [trimmed]' : s.trim()
+}
+
+function truncatePrompt(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const keepStart = Math.floor(maxChars * 0.6)
+  const keepEnd = maxChars - keepStart - 50 // reserve for "... [prompt truncated] ..."
+  return text.slice(0, keepStart) + '\n\n... [prompt truncated for length] ...\n\n' + text.slice(text.length - keepEnd)
+}
 
 /**
  * API Route: /api/generate
@@ -32,8 +111,14 @@ import { buildPrompt, buildPromptSummary } from '@/app/utils/promptBuilder'
  * 
  * @param images - Reference images (base64 strings)
  * @param prompt - Generated prompt for AI
- * @returns Base64 string of generated image
+ * @returns Generated image as data URL string, or { imageUrl, warning } when falling back (e.g. Gemini returned empty content / finishReason OTHER)
  */
+interface CustomizationLabelEntry {
+  label: string
+  description: string
+  isDecor: boolean
+}
+
 async function generateImageWithAI(
   images: string[],
   prompt: string,
@@ -42,8 +127,10 @@ async function generateImageWithAI(
   fullRoomReferenceImages?: string[],
   fullRoomAdditionalText?: string,
   configType: 'internal' | 'external' = 'internal',
-  shuffle: boolean = false
-): Promise<string> {
+  shuffle: boolean = false,
+  isCustomizationMode: boolean = false,
+  customizationLabels?: Record<string, CustomizationLabelEntry>
+): Promise<string | { imageUrl: string; warning: string }> {
   const isExternal = configType === 'external'
   const userSpaceLabel = isExternal ? "USER'S ORIGINAL PROPERTY/HOUSE" : "USER'S ROOM"
   const geminiApiKey = process.env.IMAGE_GENERATION_API_KEY
@@ -163,9 +250,9 @@ You MUST:
 2. Use the reference ONLY to extract: style, elements, furniture, colors, components (e.g. ${isExternal ? 'lighting style, landscaping, color tone' : 'furniture style, color palette, decor'}). Do NOT take layout or dimensions from the reference.
 3. Do NOT copy or redraw the reference ${isExternal ? 'building' : 'room'}. The output must BE the user's original ${isExternal ? 'property' : 'room'} from the first set of images, with the same layout and size.
 4. ${isExternal ? 'Only styling (elements, colors, components) may be inspired by the reference. Building layout, size, length, width, height come ONLY from the user\'s images.' : 'Only furniture and decor may be inspired by the reference. Room layout, size, length, width, height come ONLY from the user\'s images.'}
-${fullRoomAdditionalText?.trim() ? `\nAdditional user instructions:\n${fullRoomAdditionalText.trim()}` : ''}${doNotCopyRefBlock}`
-      : fullRoomAdditionalText?.trim()
-        ? `\n\nAdditional user instructions for reconfiguration:\n${fullRoomAdditionalText.trim()}`
+${capUserText(fullRoomAdditionalText) ? `\nAdditional user instructions:\n${capUserText(fullRoomAdditionalText)}` : ''}${doNotCopyRefBlock}`
+      : capUserText(fullRoomAdditionalText)
+        ? `\n\nAdditional user instructions for reconfiguration:\n${capUserText(fullRoomAdditionalText)}`
         : ''
 
     const structureLabel = isExternal ? 'PROPERTY STRUCTURE' : 'ROOM STRUCTURE'
@@ -196,63 +283,63 @@ ${structureLabel}:
 ${reconfigLabel}:
 ${reconfigLine}`
 
+    const geminiPromptTruncated = truncatePrompt(geminiPrompt, MAX_PROMPT_CHARS)
+
     // Call Google Gemini API for enhanced prompt
     // Allow overriding the model via environment variable (GEMINI_TEXT_MODEL)
     // Default to gemini-2.5-flash on the v1 API
     const geminiModel =
       process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash'
 
-    const geminiResponse = await fetch(
+    const geminiTextBody = JSON.stringify({
+      contents: [
+        {
+          parts: [
+            // Design-context prefix helps safety filters treat request as non-sensitive
+            {
+              text: DESIGN_CONTEXT_PREFIX + (isExternal
+                ? `MAIN IDEA: The output must MATCH the user's ORIGINAL PROPERTY (following images). The following image(s) are the USER'S ORIGINAL HOUSE/PROPERTY - preserve this exact building: same facade, same roof, same doors/windows/balconies/staircase positions, same proportions. Do NOT copy any reference building shown later. Only optional external styling (e.g. lighting, landscaping) may be inspired by reference.`
+                : 'MAIN IDEA: The output must MATCH the user\'s room - same SIZE, LENGTH, HEIGHT, WIDTH and LAYOUT. Only reconfigure the INTERIOR (furniture, decor). The following image(s) are the USER\'S ROOM - preserve this exact room structure (walls, floor, ceiling, doors, windows, proportions). Only furniture and decor may change. Do NOT copy the reference room.'),
+            },
+            ...roomImageParts,
+            // Full config reference - STYLE ONLY, do NOT copy reference
+            ...(fullRoomRefParts.length > 0
+              ? [
+                  {
+                    text: isExternal
+                      ? "REFERENCE image(s) below - for STYLE INSPIRATION ONLY. Do NOT copy this building. Do NOT describe or redraw the reference property. Describe ONLY the user's property (first images) and optional subtle style cues (e.g. lighting, plant style) inspired by the reference. The output must BE the user's original property."
+                      : "REFERENCE image(s) below - for style, elements, furniture, colors, components ONLY. Do NOT use reference for layout, size, length, width, or height. Describe what to remove from the user's room and what style/elements/colors/components to add from references. The output must BE the user's room (first images) with the same layout and dimensions, with reference-style interior.",
+                  },
+                  ...fullRoomRefParts.map(p => ({ inlineData: p.inlineData })),
+                ]
+              : []),
+            // Component reference images (style / design only) with labels
+            ...componentParts.flatMap((comp) =>
+              comp.label
+                ? [
+                    { text: `Reference component style: ${comp.label}` },
+                    { inlineData: comp.inlineData },
+                  ]
+                : [{ inlineData: comp.inlineData }]
+            ),
+            { text: geminiPromptTruncated },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: shuffle ? 0.2 : 0,
+        topP: 0.8,
+      },
+    })
+
+    const geminiResponse = await fetchGemini(
       `https://generativelanguage.googleapis.com/v1/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                // User's original space (room or property) - output MUST be this, not the reference
-                {
-                  text: isExternal
-                    ? `MAIN IDEA: The output must MATCH the user's ORIGINAL PROPERTY (following images). The following image(s) are the USER'S ORIGINAL HOUSE/PROPERTY - preserve this exact building: same facade, same roof, same doors/windows/balconies/staircase positions, same proportions. Do NOT copy any reference building shown later. Only optional external styling (e.g. lighting, landscaping) may be inspired by reference.`
-                    : 'MAIN IDEA: The output must MATCH the user\'s room - same SIZE, LENGTH, HEIGHT, WIDTH and LAYOUT. Only reconfigure the INTERIOR (furniture, decor). The following image(s) are the USER\'S ROOM - preserve this exact room structure (walls, floor, ceiling, doors, windows, proportions). Only furniture and decor may change. Do NOT copy the reference room.',
-                },
-                ...roomImageParts,
-                // Full config reference - STYLE ONLY, do NOT copy reference
-                ...(fullRoomRefParts.length > 0
-                  ? [
-                      {
-                        text: isExternal
-                          ? "REFERENCE image(s) below - for STYLE INSPIRATION ONLY. Do NOT copy this building. Do NOT describe or redraw the reference property. Describe ONLY the user's property (first images) and optional subtle style cues (e.g. lighting, plant style) inspired by the reference. The output must BE the user's original property."
-                          : "REFERENCE image(s) below - for style, elements, furniture, colors, components ONLY. Do NOT use reference for layout, size, length, width, or height. Describe what to remove from the user's room and what style/elements/colors/components to add from references. The output must BE the user's room (first images) with the same layout and dimensions, with reference-style interior.",
-                      },
-                      ...fullRoomRefParts.map(p => ({ inlineData: p.inlineData })),
-                    ]
-                  : []),
-                // Component reference images (style / design only) with labels
-                ...componentParts.flatMap((comp) =>
-                  comp.label
-                    ? [
-                        { text: `Reference component style: ${comp.label}` },
-                        { inlineData: comp.inlineData },
-                      ]
-                    : [{ inlineData: comp.inlineData }]
-                ),
-                { text: geminiPrompt },
-              ],
-            },
-          ],
-          // Keep text model deterministic and conservative so it follows
-          // layout/structure rules very strictly, especially on first runs.
-          generationConfig: {
-            // Keep deterministic for base description; small variation if shuffle requested
-            temperature: shuffle ? 0.2 : 0,
-            topP: 0.8,
-          },
-        }),
-      }
+        headers: { 'Content-Type': 'application/json' },
+        body: geminiTextBody,
+      },
+      GEMINI_TEXT_TIMEOUT_MS
     )
 
     if (!geminiResponse.ok) {
@@ -262,8 +349,14 @@ ${reconfigLine}`
     }
 
     const geminiData = await geminiResponse.json()
-    const enhancedDescription = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ''
-    console.log('Gemini enhanced description:', enhancedDescription.substring(0, 300) + '...')
+    const firstCandidate = geminiData.candidates?.[0]
+    const finishReason = firstCandidate?.finishReason
+    const parts = firstCandidate?.content?.parts
+    if (!parts?.length || finishReason === 'OTHER') {
+      console.warn('Gemini text response had no content or finishReason OTHER:', { finishReason, hasParts: !!parts?.length })
+    }
+    const enhancedDescription = parts?.[0]?.text || ''
+    console.log('Gemini enhanced description:', enhancedDescription.substring(0, 300) + (enhancedDescription ? '...' : '(empty)'))
 
     // Parse STRUCTURE and RECONFIGURATION from the text model (ROOM STRUCTURE or PROPERTY STRUCTURE)
     let roomStructureText = ''
@@ -321,64 +414,127 @@ ${enhancedDescription}
 
 OUTPUT: Same ${isExternal ? 'property' : 'room'} as user's images. Do NOT output the reference image.`
 
-    const finalPrompt = `${prompt}${referenceComponentsFinalText}
-${structureBlock}`
+    // Build a compact prompt for the image model.
+    // In customization mode: build a DIRECT, TARGETED prompt from user's selections —
+    // do NOT use the text model's reconfig output which may describe unrelated changes.
+    // In normal mode: use text model's parsed structure + reconfig snippets.
+    const STRUCT_CAP = 800
+    const RECONFIG_CAP = 800
+    const structSnippet = roomStructureText.length > STRUCT_CAP
+      ? roomStructureText.slice(0, STRUCT_CAP) + '…'
+      : roomStructureText
+
+    let imageModelPrompt: string
+
+    if (isCustomizationMode && customizationLabels && Object.keys(customizationLabels).length > 0) {
+      // Build explicit per-element instructions from the user's selections
+      const restyleLines: string[] = []
+      const addDecorLines: string[] = []
+
+      Object.entries(customizationLabels).forEach(([elementType, entry]) => {
+        if (entry.isDecor) {
+          addDecorLines.push(`• ${entry.label} – ${entry.description}`)
+        } else {
+          restyleLines.push(`• ${elementType}: change to "${entry.label}" – ${entry.description}`)
+        }
+      })
+
+      const changeBlock = [
+        restyleLines.length > 0
+          ? `RESTYLE ONLY THESE ELEMENTS (change their color/texture/material as specified; do NOT touch anything else):\n${restyleLines.join('\n')}`
+          : '',
+        addDecorLines.length > 0
+          ? `ADD ONLY THESE DECORATIVE ELEMENTS in empty corners or surfaces (do NOT remove or alter ANY existing element):\n${addDecorLines.join('\n')}`
+          : '',
+      ].filter(Boolean).join('\n\n')
+
+      const elementList = Object.keys(customizationLabels).join(', ')
+
+      imageModelPrompt = isExternal
+        ? `${DESIGN_CONTEXT_PREFIX}Professional exterior design visualization.
+
+You are given ONE image (the current result). Make ONLY the following specific changes. Everything else must remain pixel-perfect identical.
+
+${changeBlock}
+
+ABSOLUTE RULES:
+- ONLY change: ${elementList}.
+- Do NOT change: any other part of the building, facade, windows, doors, balconies, roof, landscaping, sky, or ground — unless it is explicitly listed above.
+- Keep the exact same camera angle, framing, proportions, and all unlisted elements completely unchanged.
+- The output must look like the same photograph with ONLY those listed elements changed.`
+        : `${DESIGN_CONTEXT_PREFIX}Professional interior design visualization.
+
+You are given ONE image (the current result). Make ONLY the following specific changes. Everything else must remain pixel-perfect identical.
+
+${changeBlock}
+
+ABSOLUTE RULES:
+- ONLY change: ${elementList}.
+- Do NOT change: sofa, chairs, tables, floor, ceiling, lighting, decor, artwork, plants, or ANY other element that is NOT listed above.
+- Keep the exact same camera angle, framing, layout, and all unlisted elements completely unchanged.
+- The output must look like the same photograph with ONLY those listed elements changed. No other differences allowed.`
+    } else {
+      // Normal (non-customization) mode: use text model output
+      const reconfigSnippet = reconfigurationText.length > RECONFIG_CAP
+        ? reconfigurationText.slice(0, RECONFIG_CAP) + '…'
+        : reconfigurationText
+
+      imageModelPrompt = isExternal
+        ? `${DESIGN_CONTEXT_PREFIX}Professional exterior design visualization.
+
+PROPERTY (from uploaded images – reproduce exactly):
+${structSnippet || 'Same building as the uploaded image.'}
+
+STYLE CHANGES TO APPLY (colors, materials, landscaping only – no structural change):
+${reconfigSnippet || 'Restyle exterior surfaces.'}
+
+RULES: Same building, same facade, same roof, same doors/windows/balconies/staircase, same proportions. Only change colors, cladding, lighting, and landscaping.`
+        : `${DESIGN_CONTEXT_PREFIX}Professional interior design visualization.
+
+ROOM (from uploaded images – reproduce exactly):
+${structSnippet || 'Same room as the uploaded image.'}
+
+INTERIOR CHANGES TO APPLY (furniture and decor only):
+${reconfigSnippet || 'Reconfigure interior furniture and decor.'}
+
+RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensions). Only furniture and decor may change.`
+    }
 
     // Step 3: Use Gemini image model to generate a new room image
-    // We use the v1beta image-capable model (e.g. gemini-3-pro-image-preview)
     const geminiImageModel =
-      process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
+      process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview'
 
-    const imageResponse = await fetch(
+    const imageRequestBody = JSON.stringify({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: imageModelPrompt },
+            ...(roomImageParts.slice(0, MAX_ROOM_IMAGES_FOR_IMAGE_MODEL).map(p => ({ inlineData: p.inlineData }))),
+            ...componentParts.slice(0, MAX_COMPONENT_IMAGES_FOR_IMAGE_MODEL).flatMap((comp) =>
+              comp.label
+                ? [
+                    { text: `Style reference – ${comp.label}` },
+                    { inlineData: comp.inlineData },
+                  ]
+                : [{ inlineData: comp.inlineData }]
+            ),
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: shuffle ? 0.35 : 0,
+      },
+    })
+
+    const imageResponse = await fetchGemini(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiImageModel}:generateContent?key=${geminiApiKey}`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                // CRITICAL: User's ORIGINAL images first - output MUST be this space, NOT the reference
-                {
-                  text: isExternal
-                    ? "MAIN IDEA: Draw the user's ORIGINAL PROPERTY (images below) - same building, same facade, same doors/windows/balconies/staircase, same proportions. Do NOT draw the reference building. Reference images (if any) are for STYLE inspiration only (e.g. lighting mood, plant style). Your output must BE the user's property from the first image(s), not a copy of the reference."
-                    : "MAIN IDEA: Keep the SIZE, LENGTH, HEIGHT, WIDTH and LAYOUT the SAME as the user's room images below. Only reconfigure the INTERIOR (furniture, decor). Your output MUST MATCH the user's room: same walls, floor, ceiling, doors, windows, same dimensions. Reference images are for style, elements, furniture, colors, components ONLY—not for layout or size. Do NOT draw the reference room. Copy the room structure from the first image(s); only change furniture and decor inside that room.",
-                },
-                ...(roomImageParts.slice(0, 4).map(p => ({ inlineData: p.inlineData }))),
-                // NOTE: We intentionally do NOT pass fullRoomRefParts as images here anymore.
-                // Style from reference images is already captured in the text prompt (finalPrompt).
-                // This strongly biases the image model to copy geometry/layout ONLY from the user's original images.
-                // Component reference images - style for interior elements only
-                ...componentParts.flatMap((comp) =>
-                  comp.label
-                    ? [
-                        { text: `Reference component style for interior element: ${comp.label}` },
-                        { inlineData: comp.inlineData },
-                      ]
-                    : [{ inlineData: comp.inlineData }]
-                ),
-                // Final prompt with configuration requirements
-                { text: finalPrompt },
-                // Extra hard constraints to force layout/dimension match with uploaded images
-                {
-                  text: isExternal
-                    ? "ABSOLUTE RULES (EXTERNAL):\\n- Reproduce the SAME PROPERTY LAYOUT, SIZE, SHAPE, AND PROPORTIONS as in the user's first uploaded external image.\\n- Do NOT move, resize, or reshape walls, facade edges, roofs, doors, windows, balconies, staircase, or compound boundaries.\\n- Only change STYLING ELEMENTS (lighting mood, colors, plants/landscaping, surface finishes) and other movable/external components. The building and site geometry must remain IDENTICAL to the uploaded image."
-                    : "ABSOLUTE RULES (INTERNAL):\\n- Reproduce the SAME ROOM LAYOUT, SIZE, SHAPE, AND PROPORTIONS as in the user's first uploaded room image.\\n- Do NOT move, resize, or reshape walls, floor edges, ceiling, doors, windows, or structural elements.\\n- Only change FURNITURE, DECOR, AND MOVABLE COMPONENTS inside this fixed room. The room geometry (layout, length, width, height) must remain IDENTICAL to the uploaded image.",
-                },
-              ],
-            },
-          ],
-          // Low temperature so the image model copies the uploaded
-          // room/property layout very closely instead of exploring.
-          generationConfig: {
-            // For shuffle runs, allow slightly more variation while still favouring the same layout
-            temperature: shuffle ? 0.35 : 0,
-          },
-        }),
-      }
+        headers: { 'Content-Type': 'application/json' },
+        body: imageRequestBody,
+      },
+      GEMINI_IMAGE_TIMEOUT_MS
     )
 
     if (!imageResponse.ok) {
@@ -389,15 +545,80 @@ ${structureBlock}`
 
     const imageData = await imageResponse.json()
 
+    const imageCandidate = imageData.candidates?.[0]
+    const imageFinishReason = imageCandidate?.finishReason
+    const imageParts = imageCandidate?.content?.parts
+
     // Find the first inlineData part (image) in the response
-    const imagePart =
-      imageData.candidates?.[0]?.content?.parts?.find(
-        (part: any) => part.inlineData && part.inlineData.data
-      )
+    const imagePart = Array.isArray(imageParts)
+      ? imageParts.find((part: any) => part.inlineData && part.inlineData.data)
+      : undefined
 
     if (!imagePart || !imagePart.inlineData?.data) {
-      console.warn('Gemini image response did not contain image data. Falling back to base image.')
-      return generateModifiedImage(images[0], finalPrompt, enhancedDescription)
+      console.warn(
+        `Image model returned no image (finishReason: ${imageFinishReason ?? 'unknown'}). Retrying with minimal prompt.`
+      )
+
+      /** Small helper: call the image model with a given prompt and image parts, return base64 data URL or null */
+      const tryImageModel = async (parts: object[]): Promise<string | null> => {
+        await new Promise((r) => setTimeout(r, 1200))
+        const body = JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: { temperature: 0.2 },
+        })
+        const res = await fetchGemini(
+          `https://generativelanguage.googleapis.com/v1beta/models/${geminiImageModel}:generateContent?key=${geminiApiKey}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
+          GEMINI_IMAGE_TIMEOUT_MS
+        )
+        if (!res.ok) {
+          console.warn(`Image model retry HTTP error: ${res.status}`)
+          return null
+        }
+        const data = await res.json()
+        const finishReason = data.candidates?.[0]?.finishReason
+        const found = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data)
+        if (!found) {
+          console.warn(`Image model retry returned no image (finishReason: ${finishReason ?? 'unknown'})`)
+          return null
+        }
+        const mime = found.inlineData.mimeType || 'image/png'
+        return `data:${mime};base64,${found.inlineData.data}`
+      }
+
+      // Retry 1: minimal prompt with one image (removes complex instructions that may trigger filters)
+      const minimalPrompt = isExternal
+        ? `${DESIGN_CONTEXT_PREFIX}Restyle the exterior of the building in the uploaded image. Keep the building structure identical. Only change colors, materials, and landscaping.`
+        : `${DESIGN_CONTEXT_PREFIX}Redecorate the interior of the room in the uploaded image. Keep the room structure (walls, floor, ceiling, doors, windows) identical. Only change furniture and decor.`
+
+      const retry1 = await tryImageModel([
+        { text: minimalPrompt },
+        { inlineData: roomImageParts[0].inlineData },
+      ])
+      if (retry1) {
+        console.log('Retry 1 (minimal prompt) succeeded.')
+        return retry1
+      }
+
+      // Retry 2: absolute minimum — no design instructions at all, just ask for a redesigned room
+      const barePrompt = isExternal
+        ? 'Apply a fresh exterior style to this building. Keep the structure the same.'
+        : 'Redesign the interior of this room with modern furniture. Keep walls, floor, and ceiling the same.'
+
+      const retry2 = await tryImageModel([
+        { text: barePrompt },
+        { inlineData: roomImageParts[0].inlineData },
+      ])
+      if (retry2) {
+        console.log('Retry 2 (bare prompt) succeeded.')
+        return retry2
+      }
+
+      console.warn('All retries failed. Falling back to base image.')
+      return {
+        imageUrl: generateModifiedImage(images[0], imageModelPrompt, enhancedDescription),
+        warning: 'Generated image could not be produced; your original image is shown. Try again or simplify the request.',
+      }
     }
 
     const mimeType = imagePart.inlineData.mimeType || 'image/png'
@@ -408,7 +629,7 @@ ${structureBlock}`
     
   } catch (error) {
     console.error('Error in image generation:', error)
-    return generatePlaceholderImage(images, prompt)
+    return generatePlaceholderImage(images, prompt) as string
   }
 }
 
@@ -481,6 +702,7 @@ export async function POST(request: NextRequest) {
       vastuEnabled,
       shuffle,
       customizationStyles,
+      customizationLabels,   // Record<elementType, { label, description, isDecor }>
       externalCustomization,
       selectedStyle,
       selectedColorPalette,
@@ -569,6 +791,8 @@ export async function POST(request: NextRequest) {
       vastuEnabled,
       shuffle: shuffle || false,
       customizationStyles,
+      customizationLabels:
+        customizationLabels && typeof customizationLabels === 'object' ? customizationLabels : undefined,
       externalCustomization:
         configType === 'external' && externalCustomization && typeof externalCustomization === 'object'
           ? externalCustomization
@@ -644,7 +868,7 @@ The SINGLE image provided below is the CURRENT RESULT. Your output MUST be this 
     console.log('Generating image with prompt:', promptSummary)
 
     // Generate the image using AI (or placeholder). In customization mode we pass only the current result so layout is preserved.
-    const generatedImageUrl = await generateImageWithAI(
+    const result = await generateImageWithAI(
       imagesForGeneration,
       prompt,
       isCustomizationMode ? undefined : componentReferenceImages,
@@ -652,14 +876,19 @@ The SINGLE image provided below is the CURRENT RESULT. Your output MUST be this 
       isCustomizationMode ? undefined : fullRoomReferenceImages,
       isCustomizationMode ? undefined : fullRoomAdditionalText,
       configType === 'external' ? 'external' : 'internal',
-      shuffle || false
+      shuffle || false,
+      !!isCustomizationMode,
+      customizationLabels && typeof customizationLabels === 'object' ? customizationLabels : undefined
     )
 
-    // Return the generated image
+    const imageUrl = typeof result === 'string' ? result : result.imageUrl
+    const warning = typeof result === 'string' ? undefined : result.warning
+
     return NextResponse.json({
       success: true,
-      imageUrl: generatedImageUrl,
-      promptSummary, // Include for debugging
+      imageUrl,
+      ...(warning && { warning }),
+      promptSummary,
     })
   } catch (error) {
     console.error('Error generating image:', error)

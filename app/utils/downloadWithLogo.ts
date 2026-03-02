@@ -1,14 +1,21 @@
 /**
- * Composites the company logo onto the generated image at the bottom-right corner
- * and triggers download. If the logo fails to load, downloads the image without the logo.
+ * Composites the company logo onto the generated image: repeated diagonal watermarks
+ * across the image (like reference) plus a small logo in the bottom-right corner.
+ * Triggers download. If the logo fails to load, uses text watermarks only.
  */
 
 const LOGO_PATH = '/tatva-ops-logo.png'
-const LOGO_MAX_WIDTH_RATIO = 0.22  // logo width up to 22% of image width
-const LOGO_MAX_HEIGHT_RATIO = 0.14 // logo height up to 14% of image height
-const LOGO_MIN_SIZE = 80            // minimum logo width/height in px so it stays visible
-const PADDING_RATIO = 0.025        // padding from edge = 2.5% of smaller dimension
-const BLACK_THRESHOLD = 45         // pixels with r,g,b below this become transparent (remove black bg)
+const WATERMARK_TEXT = 'TatvaOps'
+const WATERMARK_OPACITY = 0.2            // intensity of watermark (lower = more subtle)
+const WATERMARK_ANGLE_DEG = -35         // diagonal
+const WATERMARK_FONT_SIZE_RATIO = 0.07  // ~7% of min dimension
+const WATERMARK_SPACING_X_RATIO = 0.52  // horizontal spacing (larger = more spread out)
+const WATERMARK_SPACING_Y_RATIO = 0.44  // vertical spacing (larger = more spread out)
+const LOGO_MAX_WIDTH_RATIO = 0.22
+const LOGO_MAX_HEIGHT_RATIO = 0.14
+const LOGO_MIN_SIZE = 80
+const PADDING_RATIO = 0.025
+const BLACK_THRESHOLD = 45
 
 function getLogoUrl(): string {
   if (typeof window === 'undefined') return LOGO_PATH
@@ -48,6 +55,69 @@ function makeBlackTransparent(ctx: CanvasRenderingContext2D, w: number, h: numbe
   ctx.putImageData(imageData, 0, 0)
 }
 
+/** Draw repeated diagonal watermarks across the full image (semi-transparent white text). */
+function drawWatermarkPattern(ctx: CanvasRenderingContext2D, imgW: number, imgH: number): void {
+  const minDim = Math.min(imgW, imgH)
+  const fontSize = Math.max(28, minDim * WATERMARK_FONT_SIZE_RATIO)
+  const stepX = minDim * WATERMARK_SPACING_X_RATIO
+  const stepY = minDim * WATERMARK_SPACING_Y_RATIO
+  const angleRad = (WATERMARK_ANGLE_DEG * Math.PI) / 180
+
+  ctx.save()
+  ctx.font = `600 ${fontSize}px sans-serif`
+  ctx.fillStyle = `rgba(255, 255, 255, ${WATERMARK_OPACITY})`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const margin = Math.max(stepX, stepY)
+  let row = 0
+  for (let cy = -margin; cy < imgH + margin; cy += stepY) {
+    const offsetX = (row % 2) * (stepX * 0.5)
+    for (let cx = -margin + offsetX; cx < imgW + margin; cx += stepX) {
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.rotate(angleRad)
+      ctx.fillText(WATERMARK_TEXT, 0, 0)
+      ctx.restore()
+    }
+    row++
+  }
+  ctx.restore()
+}
+
+/**
+ * Applies the repeated diagonal watermark pattern to an image and returns the result as a data URL.
+ * Use this when displaying the generated image so every output shows the watermark immediately.
+ */
+export async function applyWatermarkToImage(imageUrl: string): Promise<string> {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return imageUrl
+
+  let mainObjectUrl: string | null = null
+  try {
+    let mainSrc = imageUrl
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      mainObjectUrl = await fetchAsObjectUrl(imageUrl)
+      mainSrc = mainObjectUrl
+    }
+    const mainImg = await loadImage(mainSrc, mainSrc.startsWith('data:') ? null : 'anonymous')
+    const imgW = mainImg.naturalWidth
+    const imgH = mainImg.naturalHeight
+    canvas.width = imgW
+    canvas.height = imgH
+    ctx.drawImage(mainImg, 0, 0)
+    drawWatermarkPattern(ctx, imgW, imgH)
+    const dataUrl = canvas.toDataURL('image/png', 0.92)
+    if (mainObjectUrl) URL.revokeObjectURL(mainObjectUrl)
+    return dataUrl
+  } catch (e) {
+    if (mainObjectUrl) URL.revokeObjectURL(mainObjectUrl)
+    console.error('applyWatermarkToImage failed', e)
+    return imageUrl
+  }
+}
+
 export async function downloadImageWithLogo(
   imageUrl: string,
   filename: string = `room-configuration-${Date.now()}.png`
@@ -73,6 +143,7 @@ export async function downloadImageWithLogo(
     canvas.height = imgH
     ctx.drawImage(mainImg, 0, 0)
 
+    // Image is already watermarked when displayed; only add corner logo on download
     const logoUrl = getLogoUrl()
     try {
       const logoImg = await loadImage(logoUrl, 'anonymous')
@@ -110,7 +181,7 @@ export async function downloadImageWithLogo(
         ctx.fillStyle = 'rgba(0,0,0,0.6)'
         ctx.strokeStyle = 'rgba(255,255,255,0.8)'
         ctx.lineWidth = 2
-        const text = 'Tatva:Ops'
+        const text = 'TatvaOps'
         ctx.measureText(text)
         const textW = ctx.measureText(text).width
         const textH = fontSize * 1.2

@@ -13,6 +13,13 @@ interface ArrangementConfig {
   arrangementPreferencesText: string
 }
 
+interface CustomizationLabelEntry {
+  label: string
+  description: string
+  /** true if this is a decor/additive override (add elements); false = restyle appearance of existing element */
+  isDecor: boolean
+}
+
 interface PromptBuilderOptions {
   configMode: 'purpose' | 'arrangement'
   purposeInput?: string
@@ -22,14 +29,24 @@ interface PromptBuilderOptions {
   shuffle?: boolean
   /** 'internal' = room; 'external' = facade/compound. Affects preservation and wording. */
   configType?: 'internal' | 'external'
-  /** Optional visual-only customization styles applied after first generation (interior) */
+  /** Optional visual-only customization styles applied after first generation (interior) – maps element type -> option id */
   customizationStyles?: Record<string, string | null>
+  /** Human-readable labels for each customization override – maps element type -> { label, description, isDecor } */
+  customizationLabels?: Record<string, CustomizationLabelEntry>
   /** Exterior customization: category -> preset id (e.g. facade -> 'facade_stone'). Used when configType === 'external'. */
   externalCustomization?: Record<string, string | null>
   /** User-selected design style (e.g. Modern, Minimalist). Injected into prompt for both interior and exterior. */
   selectedStyle?: string | null
   /** User-selected color palette id (e.g. high_contrast_neutrals, forest_inspired). Optional; AI applies palette with style. */
   selectedColorPalette?: string | null
+}
+
+/** Max length for user-supplied text fields to avoid oversized prompts and filter risk. */
+const MAX_USER_TEXT_CHARS = 2000
+
+function capUserText(s: string | undefined): string {
+  if (!s?.trim()) return ''
+  return s.trim().length > MAX_USER_TEXT_CHARS ? s.trim().slice(0, MAX_USER_TEXT_CHARS) + ' [trimmed]' : s.trim()
 }
 
 /**
@@ -119,8 +136,8 @@ function buildUserPrompt(options: PromptBuilderOptions): string {
   let prompt = ''
 
   if (configMode === 'purpose') {
-    // Full Room/External Configuration: optional purpose text; reference images for style only
-    const userText = purposeInput?.trim() || ''
+    // Full Room/External Configuration: optional purpose text; reference images for style only (capped for guardrails)
+    const userText = capUserText(purposeInput)
     prompt = isExternal
       ? (userText
           ? `MAIN IDEA: The output MUST be the user's ORIGINAL PROPERTY (first images). Same building, same facade, same doors/windows/balconies/staircase. Do NOT generate the same as the reference image.
@@ -188,7 +205,7 @@ ${newComponentsNote || '- (Reference component images will be provided separatel
 NOTE: Reference component images are for extracting style, elements, furniture, colors, and components ONLY. Use them for design, material, color, and component type—NOT for room layout or dimensions. Layout, size, length, width, height of the room must remain EXACTLY as in the user's uploaded images.
 
 4. Arrangement preferences (user input):
-${arrangementPreferencesText?.trim() ? arrangementPreferencesText.trim() : '- (User did not specify - arrange components in a practical, balanced way)'}
+${arrangementPreferencesText ? capUserText(arrangementPreferencesText) || '- (User did not specify - arrange components in a practical, balanced way)' : '- (User did not specify - arrange components in a practical, balanced way)'}
 
 ABSOLUTE REQUIREMENTS:
 - Keep the EXACT same room dimensions (length, width, height), layout, wall positions, window positions, door positions, and ceiling height as shown in the USER'S UPLOADED room images. Do NOT take layout or dimensions from any reference image.
@@ -210,7 +227,7 @@ ${shuffle ? 'For this variation, keep the same components and IDENTICAL room str
  * @returns Complete prompt string ready to be sent to AI
  */
 export function buildPrompt(options: PromptBuilderOptions): string {
-  const { vastuEnabled, configType = 'internal', customizationStyles, externalCustomization, selectedStyle, selectedColorPalette } = options
+  const { vastuEnabled, configType = 'internal', customizationStyles, customizationLabels, externalCustomization, selectedStyle, selectedColorPalette } = options
 
   // Build the user prompt based on configuration
   let userPrompt = buildUserPrompt(options)
@@ -250,22 +267,48 @@ export function buildPrompt(options: PromptBuilderOptions): string {
 
   // Interior: append visual-only customization overrides (no geometry changes)
   if (configType !== 'external' && customizationStyles) {
-    const lines = Object.entries(customizationStyles)
-      .filter(([, value]) => value)
-      .map(
-        ([key, value]) =>
-          `- ${key}: apply visual style "${value}" from the internal library; keep position, size, orientation, and geometry unchanged.`
-      )
+    const restyleLines: string[] = []
+    const decorLines: string[] = []
 
-    if (lines.length > 0) {
+    Object.entries(customizationStyles)
+      .filter(([, value]) => value)
+      .forEach(([key]) => {
+        const entry = customizationLabels?.[key]
+        if (entry) {
+          if (entry.isDecor) {
+            decorLines.push(`- ${entry.label}: ${entry.description}`)
+          } else {
+            restyleLines.push(`- ${key} → "${entry.label}": ${entry.description}`)
+          }
+        } else {
+          // Fallback: no label info, use element type only
+          restyleLines.push(`- ${key}: restyle the appearance only; keep position and geometry unchanged.`)
+        }
+      })
+
+    const sections: string[] = []
+
+    if (restyleLines.length > 0) {
+      sections.push(`RESTYLE THESE ELEMENTS (change color/texture/material only – do NOT move, resize, or remove them):
+${restyleLines.join('\n')}`)
+    }
+
+    if (decorLines.length > 0) {
+      sections.push(`ADD THESE DECORATIVE ELEMENTS (place them naturally in empty corners or surfaces – do NOT remove or alter any existing furniture, walls, floor, ceiling, or other elements):
+${decorLines.join('\n')}`)
+    }
+
+    if (sections.length > 0) {
       userPrompt += `
 
-CUSTOMIZATION OVERRIDES (VISUAL ONLY – NO LAYOUT CHANGE):
-${lines.join('\n')}
-CRITICAL – LAYOUT PRESERVATION:
-- Change ONLY the appearance (color, texture, material) of the elements listed above. All other elements must remain exactly as they are in the image.
-- Do NOT move, resize, add, or remove any furniture, walls, floor, ceiling, fixtures, or decor.
-- Do NOT change the layout, composition, camera angle, or proportions. The output must be the same scene with only the selected components restyled.`
+CUSTOMIZATION OVERRIDES (TARGETED CHANGES ONLY):
+${sections.join('\n\n')}
+ABSOLUTE RULES:
+- ONLY make the specific changes listed above. Every other element in the image must remain EXACTLY as it appears.
+- Do NOT change any element that is NOT listed above.
+- Do NOT move, resize, or remove any furniture, walls, floor, ceiling, fixtures, lighting, or decor that is not mentioned.
+- Do NOT change the layout, composition, camera angle, or proportions in any way.
+- The output must look like the same photograph with only the listed changes applied.`
     }
   }
 

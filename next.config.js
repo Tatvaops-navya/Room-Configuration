@@ -6,6 +6,9 @@ const nextConfig = {
       bodySizeLimit: '10mb',
     },
   },
+  async rewrites() {
+    return [{ source: '/favicon.ico', destination: '/icon.svg' }]
+  },
 }
 
 module.exports = nextConfig

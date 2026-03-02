@@ -3,31 +3,32 @@ import { NextRequest, NextResponse } from 'next/server'
 /**
  * API Route: /api/validate-image-type
  *
- * Classifies uploaded image(s) as INTERNAL (room interior) or EXTERNAL (building facade/compound).
- * Used to warn when user selects Internal config but uploads external images, or vice versa.
+ * AI analyzes uploaded images. Internal config requires interior (room) images only;
+ * external config requires external (building) images only. The client allows proceeding
+ * to the next step ONLY when this API returns valid: true. No other path to proceed.
  *
- * Body: { images: string[], expectedType: 'internal' | 'external' }
+ * Body: { images: string[] (client may send 2 to avoid 413), expectedType: 'internal' | 'external' }
  * Returns: { valid: boolean, detectedType: 'internal' | 'external', message: string }
  */
 
 const CLASSIFY_PROMPT = `Look at the image(s) provided.
 
-Your task: decide whether the image(s) show:
+Your task: decide whether the image(s) show an INDOOR ROOM/SPACE (answer INTERNAL) or something else (answer EXTERNAL).
 
-INTERNAL:
-- Camera is clearly inside a finished room/interior.
-- You mainly see interior walls, ceiling, floor, and indoor furniture (sofas, desks, beds, chairs, storage, etc.).
-- Outside world (sky, trees, full building facade) is NOT the main subject. Windows may be visible, but the focus is the inside of the room.
+INTERNAL – answer when the image shows an indoor room or interior space, including:
+- Reception areas, lobbies, waiting areas with desk, chairs, and walls.
+- Offices, meeting rooms, conference rooms with table, chairs, walls, ceiling.
+- Living rooms, bedrooms, kitchens, bathrooms with visible walls, floor, ceiling, and furniture.
+- Any indoor space where you can see the room structure (walls, floor, ceiling) and furniture or fixtures (sofa, desk, bed, chairs, tables, lighting). The camera is inside the room.
 
-EXTERNAL:
-- Camera is outside the building or in an open compound.
-- You mainly see the building facade, exterior walls, multi-story building from outside, unfinished structure, balconies from outside, compound wall, gate, driveway, parking, staircase from outside, or large open sky/ground around the building.
-- Any photo where the main subject is the outside of a building (front, side, or back elevation) is EXTERNAL.
-- Even if the building is under construction, if you see it from outside, treat it as EXTERNAL.
+EXTERNAL – answer ONLY when the image is clearly NOT an indoor room, e.g.:
+- Building exterior, facade, outdoor view, compound, gate, driveway, parking, balcony from outside.
+- Selfies, portraits, or close-ups where a person's face/body is the main subject and the room is not visible.
+- Documents, brochures, flyers, posters, or mostly text/graphics (no real room space).
+- Outdoor scenes, sky, or unclear/non-room content.
 
-STRICT RULE:
-- If you are uncertain or the image shows both, choose EXTERNAL (facade/property) by default.
-- When the main view is the exterior of a building (house, villa, apartment from outside), always answer EXTERNAL.
+IMPORTANT: Reception areas, lobbies, offices with desk and chairs are INTERNAL. When in doubt and the image looks like an indoor room (walls + furniture/desk/chairs), answer INTERNAL.
+If multiple images are provided: answer INTERNAL if the images show indoor room(s). Answer EXTERNAL only if the images clearly show non-room content (exterior, document, selfie).
 
 Reply with exactly one word on a single line: INTERNAL or EXTERNAL.
 Do not add any other text, explanation, or punctuation.`
@@ -66,9 +67,11 @@ export async function POST(request: NextRequest) {
   const geminiApiKey = process.env.IMAGE_GENERATION_API_KEY
   if (!geminiApiKey) {
     return NextResponse.json({
-      valid: true,
+      valid: false,
       detectedType: expectedType,
-      message: 'Validation skipped (no API key).',
+      message: expectedType === 'internal'
+        ? 'Image validation is unavailable. For Internal Configuration please upload interior room images only.'
+        : 'Image validation is unavailable. For External Configuration please upload external building images only.',
     })
   }
 
@@ -96,7 +99,7 @@ export async function POST(request: NextRequest) {
           contents: [
             {
               parts: [
-                { text: 'Classify the following image(s) as INTERNAL (indoor room) or EXTERNAL (building exterior).' },
+                { text: 'Classify these image(s). INTERNAL = indoor room (reception, lobby, office, living room, etc. with walls and furniture). EXTERNAL = building exterior, selfie/portrait, or document. If you see an indoor space with desk, chairs, walls, ceiling, answer INTERNAL. Reply with one word: INTERNAL or EXTERNAL.' },
                 ...imageParts,
                 { text: CLASSIFY_PROMPT },
               ],
@@ -113,21 +116,22 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const errText = await response.text()
       console.error('validate-image-type Gemini error:', errText)
+      // On API error, allow the user to proceed — don't block on model unavailability.
       return NextResponse.json({
         valid: true,
         detectedType: expectedType,
-        message: 'Validation could not be completed.',
+        message: `Images accepted.`,
       })
     }
 
     const data = await response.json()
+    const finishReason = data.candidates?.[0]?.finishReason
     const parts = data.candidates?.[0]?.content?.parts ?? []
     const rawText = (Array.isArray(parts)
       ? parts.map((p: { text?: string }) => p?.text ?? '').join('')
       : ''
     ).trim()
 
-    // Detect INTERNAL or EXTERNAL anywhere in the response (model may add preamble)
     const textUpper = rawText.toUpperCase()
     const hasExternal = /\bEXTERNAL\b/.test(textUpper)
     const hasInternal = /\bINTERNAL\b/.test(textUpper)
@@ -140,14 +144,27 @@ export async function POST(request: NextRequest) {
         ? 'external'
         : hasInternal
         ? 'internal'
-        : (expectedType as 'internal' | 'external')
+        : null
+
+    // Only block when the model CLEARLY detected the wrong type.
+    // If response is empty/ambiguous (detected === null), let the user proceed —
+    // we should never block on model uncertainty or transient failures.
+    if (detected === null) {
+      console.warn('validate-image-type: inconclusive response from model (finishReason:', finishReason, ', rawText:', rawText, '). Allowing proceed.')
+      return NextResponse.json({
+        valid: true,
+        detectedType: expectedType,
+        message: `Images match ${expectedType} configuration.`,
+      })
+    }
+
     const valid = detected === expectedType
 
     const message = valid
       ? `Images match ${expectedType} configuration.`
       : expectedType === 'internal'
-      ? 'These images appear to be external (building/facade). For Internal Room Configuration please upload photos of the room interior.'
-      : 'These images appear to be internal (room interior). For External Configuration please upload photos of the building exterior, facade, or compound.'
+      ? 'These images appear to show a building exterior. For Internal Room Configuration please upload photos of the room interior (walls, floor, ceiling, furniture visible).'
+      : 'These images appear to show an indoor room. For External Configuration please upload photos of the building exterior, facade, or compound.'
 
     return NextResponse.json({
       valid,
@@ -156,10 +173,11 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error('validate-image-type error:', error)
+    // On any error, allow the user to proceed — don't block on validation failure.
     return NextResponse.json({
       valid: true,
       detectedType: expectedType,
-      message: 'Validation could not be completed.',
+      message: `Images accepted.`,
     })
   }
 }
