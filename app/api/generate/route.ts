@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { buildPrompt, buildPromptSummary } from '@/app/utils/promptBuilder'
+import { buildPrompt, buildPromptSummary, getPaletteInstruction } from '@/app/utils/promptBuilder'
 
 /** Timeouts for Gemini API (ms). Image generation can take 60–120+ seconds. */
 const GEMINI_TEXT_TIMEOUT_MS = 120_000
@@ -131,7 +131,9 @@ async function generateImageWithAI(
   configType: 'internal' | 'external' = 'internal',
   shuffle: boolean = false,
   isCustomizationMode: boolean = false,
-  customizationLabels?: Record<string, CustomizationLabelEntry>
+  customizationLabels?: Record<string, CustomizationLabelEntry>,
+  selectedStyle?: string | null,
+  selectedColorPalette?: string | null
 ): Promise<string | { imageUrl: string; warning: string }> {
   const isExternal = configType === 'external'
   const userSpaceLabel = isExternal ? "USER'S ORIGINAL PROPERTY/HOUSE" : "USER'S ROOM"
@@ -481,6 +483,18 @@ ABSOLUTE RULES:
         ? reconfigurationText.slice(0, RECONFIG_CAP) + '…'
         : reconfigurationText
 
+      // When user selected style and/or color palette, inject them directly into the image model prompt so the output shows BOTH style and palette (palette was often missed when only in text model output)
+      const styleForImage = typeof selectedStyle === 'string' && selectedStyle.trim() ? selectedStyle.trim() : null
+      const paletteForImage = getPaletteInstruction(selectedColorPalette)
+      const stylePaletteBlock =
+        !isExternal && (styleForImage || paletteForImage)
+          ? `REQUIRED – APPLY BOTH IN THE OUTPUT:
+${styleForImage ? `- Design style: ${styleForImage.charAt(0).toUpperCase() + styleForImage.slice(1)}. The room must clearly look like this style (furniture, materials, mood).` : ''}
+${paletteForImage ? `- Color palette: ${paletteForImage} The image MUST visibly use these colors for walls, furniture, fabrics, rugs, and accents. Do not use a different color scheme.` : ''}
+
+`
+          : ''
+
       imageModelPrompt = isExternal
         ? `${DESIGN_CONTEXT_PREFIX}Professional exterior design visualization.
 
@@ -492,19 +506,19 @@ ${reconfigSnippet || 'Restyle exterior surfaces.'}
 
 RULES: Same building, same facade, same roof, same doors/windows/balconies/staircase, same proportions. Only change colors, cladding, lighting, and landscaping.`
         : `${DESIGN_CONTEXT_PREFIX}Professional interior design visualization.
-
+${stylePaletteBlock}
 ROOM (from uploaded images – reproduce exactly):
 ${structSnippet || 'Same room as the uploaded image.'}
 
 INTERIOR CHANGES TO APPLY (furniture and decor only):
 ${reconfigSnippet || 'Reconfigure interior furniture and decor.'}
 
-RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensions). Only furniture and decor may change.`
+RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensions). Only furniture and decor may change. The output must show both the selected design style and the selected color palette clearly.`
     }
 
-    // Step 3: Use Gemini image model to generate a new room image
-    const geminiImageModel =
-      process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview'
+    // Step 3: Use image model to generate a new room image (primary: Gemini 3.0 Pro; fallback: Imagen 4.0)
+    const primaryImageModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
+    const fallbackImageModel = 'imagen-4.0-generate-001'
 
     const imageRequestBody = JSON.stringify({
       contents: [
@@ -529,105 +543,87 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
       },
     })
 
-    const imageResponse = await fetchGemini(
-      `https://generativelanguage.googleapis.com/v1beta/models/${geminiImageModel}:generateContent?key=${geminiApiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: imageRequestBody,
-      },
-      GEMINI_IMAGE_TIMEOUT_MS
-    )
-
-    if (!imageResponse.ok) {
-      const errorData = await imageResponse.text()
-      console.error('Gemini image API error:', errorData)
-      throw new Error(`Gemini image API error: ${imageResponse.status}`)
-    }
-
-    const imageData = await imageResponse.json()
-
-    const imageCandidate = imageData.candidates?.[0]
-    const imageFinishReason = imageCandidate?.finishReason
-    const imageParts = imageCandidate?.content?.parts
-
-    // Find the first inlineData part (image) in the response
-    const imagePart = Array.isArray(imageParts)
-      ? imageParts.find((part: any) => part.inlineData && part.inlineData.data)
-      : undefined
-
-    if (!imagePart || !imagePart.inlineData?.data) {
-      console.warn(
-        `Image model returned no image (finishReason: ${imageFinishReason ?? 'unknown'}). Retrying with minimal prompt.`
-      )
-
-      /** Small helper: call the image model with a given prompt and image parts, return base64 data URL or null */
-      const tryImageModel = async (parts: object[]): Promise<string | null> => {
-        await new Promise((r) => setTimeout(r, 1200))
-        const body = JSON.stringify({
-          contents: [{ role: 'user', parts }],
-          generationConfig: { temperature: 0.2 },
-        })
+    /** Call image API with a given model and body; return data URL or null */
+    const callImageModel = async (modelName: string, body: string): Promise<string | null> => {
+      try {
         const res = await fetchGemini(
-          `https://generativelanguage.googleapis.com/v1beta/models/${geminiImageModel}:generateContent?key=${geminiApiKey}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
           GEMINI_IMAGE_TIMEOUT_MS
         )
         if (!res.ok) {
-          console.warn(`Image model retry HTTP error: ${res.status}`)
+          console.warn(`Image model ${modelName} HTTP error: ${res.status}`)
           return null
         }
         const data = await res.json()
-        const finishReason = data.candidates?.[0]?.finishReason
-        const found = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data)
-        if (!found) {
-          console.warn(`Image model retry returned no image (finishReason: ${finishReason ?? 'unknown'})`)
+        const part = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data)
+        if (!part?.inlineData?.data) {
+          console.warn(`Image model ${modelName} returned no image (finishReason: ${data.candidates?.[0]?.finishReason ?? 'unknown'})`)
           return null
         }
-        const mime = found.inlineData.mimeType || 'image/png'
-        return `data:${mime};base64,${found.inlineData.data}`
-      }
-
-      // Retry 1: minimal prompt with one image (removes complex instructions that may trigger filters)
-      const minimalPrompt = isExternal
-        ? `${DESIGN_CONTEXT_PREFIX}Restyle the exterior of the building in the uploaded image. Keep the building structure identical. Only change colors, materials, and landscaping.`
-        : `${DESIGN_CONTEXT_PREFIX}Redecorate the interior of the room in the uploaded image. Keep the room structure (walls, floor, ceiling, doors, windows) identical. Only change furniture and decor.`
-
-      const retry1 = await tryImageModel([
-        { text: minimalPrompt },
-        { inlineData: roomImageParts[0].inlineData },
-      ])
-      if (retry1) {
-        console.log('Retry 1 (minimal prompt) succeeded.')
-        return retry1
-      }
-
-      // Retry 2: absolute minimum — no design instructions at all, just ask for a redesigned room
-      const barePrompt = isExternal
-        ? 'Apply a fresh exterior style to this building. Keep the structure the same.'
-        : 'Redesign the interior of this room with modern furniture. Keep walls, floor, and ceiling the same.'
-
-      const retry2 = await tryImageModel([
-        { text: barePrompt },
-        { inlineData: roomImageParts[0].inlineData },
-      ])
-      if (retry2) {
-        console.log('Retry 2 (bare prompt) succeeded.')
-        return retry2
-      }
-
-      console.warn('All retries failed. Falling back to base image.')
-      return {
-        imageUrl: generateModifiedImage(images[0], imageModelPrompt, enhancedDescription),
-        warning: 'Generated image could not be produced; your original image is shown. Try again or simplify the request.',
+        const mime = part.inlineData.mimeType || 'image/png'
+        return `data:${mime};base64,${part.inlineData.data}`
+      } catch (err) {
+        console.warn(`Image model ${modelName} failed:`, err instanceof Error ? err.message : err)
+        return null
       }
     }
 
-    const mimeType = imagePart.inlineData.mimeType || 'image/png'
-    const base64 = imagePart.inlineData.data as string
+    // Try primary model first
+    let imageUrl = await callImageModel(primaryImageModel, imageRequestBody)
+    if (imageUrl) {
+      return imageUrl
+    }
 
-    // Return a data URL that the frontend can display directly
-    return `data:${mimeType};base64,${base64}`
+    // Fallback to Imagen 4.0 if primary (e.g. Gemini 3.0 Pro) did not work
+    console.log(`Primary image model (${primaryImageModel}) failed; trying fallback ${fallbackImageModel}.`)
+    imageUrl = await callImageModel(fallbackImageModel, imageRequestBody)
+    if (imageUrl) {
+      console.log('Fallback image model succeeded.')
+      return imageUrl
+    }
+
+    // Both failed: retry with minimal prompts using fallback model
+    const tryImageModel = async (parts: object[], modelName: string): Promise<string | null> => {
+      await new Promise((r) => setTimeout(r, 1200))
+      const body = JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: { temperature: 0.2 },
+      })
+      return callImageModel(modelName, body)
+    }
+
+    const minimalPrompt = isExternal
+      ? `${DESIGN_CONTEXT_PREFIX}Restyle the exterior of the building in the uploaded image. Keep the building structure identical. Only change colors, materials, and landscaping.`
+      : `${DESIGN_CONTEXT_PREFIX}Redecorate the interior of the room in the uploaded image. Keep the room structure (walls, floor, ceiling, doors, windows) identical. Only change furniture and decor.`
+
+    const retry1 = await tryImageModel(
+      [{ text: minimalPrompt }, { inlineData: roomImageParts[0].inlineData }],
+      fallbackImageModel
+    )
+    if (retry1) {
+      console.log('Retry 1 (minimal prompt, fallback model) succeeded.')
+      return retry1
+    }
+
+    const barePrompt = isExternal
+      ? 'Apply a fresh exterior style to this building. Keep the structure the same.'
+      : 'Redesign the interior of this room with modern furniture. Keep walls, floor, and ceiling the same.'
+
+    const retry2 = await tryImageModel(
+      [{ text: barePrompt }, { inlineData: roomImageParts[0].inlineData }],
+      fallbackImageModel
+    )
+    if (retry2) {
+      console.log('Retry 2 (bare prompt, fallback model) succeeded.')
+      return retry2
+    }
+
+    console.warn('All image model attempts failed. Falling back to base image.')
+    return {
+      imageUrl: generateModifiedImage(images[0], imageModelPrompt, enhancedDescription),
+      warning: 'Generated image could not be produced; your original image is shown. Try again or simplify the request.',
+    }
     
   } catch (error) {
     console.error('Error in image generation:', error)
@@ -723,11 +719,26 @@ export async function POST(request: NextRequest) {
       Object.values(externalCustomization).some((v: unknown) => v != null && v !== '')
     const isCustomizationMode = (hasCustomizationStyles || hasExternalCustomization) && currentResultImage
 
+    // Style-only reconfigure: user changed style/palette in Edit and regenerated — use current result as single input so the new style is applied to this image (avoids keeping old style from original uploads)
+    const hasStyleOrPalette = (typeof selectedStyle === 'string' && selectedStyle.trim().length > 0) || (typeof selectedColorPalette === 'string' && selectedColorPalette.trim().length > 0)
+    const isStyleOnlyReconfigure =
+      typeof currentResultImage === 'string' &&
+      currentResultImage.length > 0 &&
+      hasStyleOrPalette &&
+      !hasCustomizationStyles &&
+      !hasExternalCustomization
+
+    // In style-only reconfigure, slightly increase randomness so the model doesn't return an identical-looking image.
+    // This does NOT allow layout changes; it only helps the model commit to new style/palette visually.
+    const effectiveShuffle = (shuffle || false) || isStyleOnlyReconfigure
+
     const minImages = configType === 'external' ? 3 : 4
     let imagesForGeneration: string[] =
       isCustomizationMode && typeof currentResultImage === 'string'
         ? [currentResultImage]
-        : images
+        : isStyleOnlyReconfigure && typeof currentResultImage === 'string'
+          ? [currentResultImage]
+          : images
 
     // Locked layout mode: use ONLY the user-selected layout reference image. Reconfigure that single image (style, colors, components) without changing layout, structure, or camera angle.
     const useLockedLayoutOnly =
@@ -749,7 +760,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
-    if (!isCustomizationMode && !useLockedLayoutOnly && imagesForGeneration.length < minImages) {
+    if (!isCustomizationMode && !isStyleOnlyReconfigure && !useLockedLayoutOnly && imagesForGeneration.length < minImages) {
       return NextResponse.json(
         { error: configType === 'external' ? 'At least 3 external images are required' : 'At least 4 images are required' },
         { status: 400 }
@@ -776,22 +787,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (configMode === 'arrangement' && !arrangementConfig) {
+    if (configMode === 'arrangement' && !isStyleOnlyReconfigure && !arrangementConfig) {
       return NextResponse.json(
         { error: 'Arrangement configuration is required for arrangement-based configuration' },
         { status: 400 }
       )
     }
 
-    // Build the base AI prompt using the prompt builder utility
+    // Build the base AI prompt. For style-only reconfigure use a purpose-mode style prompt so the model gets a clear "replace style and palette" task, not arrangement text.
+    const promptConfigMode = isStyleOnlyReconfigure ? 'purpose' : configMode
+    const promptPurposeInput = isStyleOnlyReconfigure
+      ? 'Apply the selected design style and color palette to this room image. Keep layout, structure, and camera angle identical; change only the visual style and colors.'
+      : purposeInput
     let prompt = buildPrompt({
       configType: configType === 'external' ? 'external' : 'internal',
-      configMode,
-      purposeInput,
+      configMode: promptConfigMode,
+      purposeInput: promptConfigMode === 'purpose' ? promptPurposeInput : purposeInput,
       fullRoomAdditionalText,
-      arrangementConfig,
+      arrangementConfig: isStyleOnlyReconfigure ? undefined : arrangementConfig,
       vastuEnabled,
-      shuffle: shuffle || false,
+      shuffle: effectiveShuffle,
       customizationStyles,
       customizationLabels:
         customizationLabels && typeof customizationLabels === 'object' ? customizationLabels : undefined,
@@ -803,9 +818,25 @@ export async function POST(request: NextRequest) {
       selectedColorPalette: selectedColorPalette ?? undefined,
     })
 
+    // Style-only reconfigure: user changed style/palette in Edit — output must REPLACE the existing style and palette with the new one (do not retain previous look)
+    if (isStyleOnlyReconfigure) {
+      const styleLabel = (typeof selectedStyle === 'string' && selectedStyle.trim()) ? selectedStyle.trim() : 'the selected'
+      const paletteLabel = (typeof selectedColorPalette === 'string' && selectedColorPalette.trim()) ? selectedColorPalette.trim() : ''
+      prompt =
+        `STYLE-ONLY RECONFIGURE – REPLACE EXISTING STYLE AND PALETTE:
+The SINGLE image below is the CURRENT room. The user has chosen a NEW design style and/or color palette. Your output MUST:
+- Show the SAME room (same layout, structure, camera angle, proportions) but with the visual style and color palette COMPLETELY REPLACED by the new selection.
+- Apply ${styleLabel} style and${paletteLabel ? ` the "${paletteLabel}" color palette` : ' the selected color palette'} to the entire room. The result must CLEARLY reflect this new style and palette.
+- Do NOT retain the previous visual style (e.g. if the current image is Japanese or pastel, the output must NOT look Japanese or pastel — it must look like the NEW style and palette).
+- Preserve layout, furniture positions, and room structure; change ONLY the look: colors, materials, textures, mood, and style expression to match the new style and palette.
+- The output MUST look NOTICEABLY DIFFERENT from the input image in overall color scheme and finishes. If it looks the same, it is wrong.
+
+` + prompt
+    }
+
     // Locked layout: user chose one image as layout reference. We send ONLY that image. Output must preserve layout, structure, angle; only change style, colors, components.
     const isExternal = configType === 'external'
-    if (useLockedLayoutOnly) {
+    if (!isStyleOnlyReconfigure && useLockedLayoutOnly) {
       prompt =
         `LOCKED LAYOUT – RECONFIGURE THIS IMAGE ONLY (FULL IMAGE REQUIRED):
 You receive ONE image below. This is the user's locked layout reference. Your output MUST:
@@ -815,7 +846,7 @@ You receive ONE image below. This is the user's locked layout reference. Your ou
 - The result must look like the SAME photograph from the SAME viewpoint with only visual/style updates. Same field of view, same edges, complete scene.
 
 ` + prompt
-    } else {
+    } else if (!isStyleOnlyReconfigure) {
       prompt =
         `FIXED LAYOUT: The FIRST image in the set below is the single source of layout and framing for this generation. Your output MUST show the FULL ${isExternal ? 'property' : 'room'} from this exact viewpoint and framing - the complete scene from edge to edge. Do NOT crop, zoom in, or focus on one corner or one element. Preserve the complete view; only reconfigure style, ${isExternal ? 'materials, colors, landscaping' : 'furniture, and colors'}.\n\n` +
         prompt
@@ -865,22 +896,26 @@ The SINGLE image provided below is the CURRENT RESULT. Your output MUST be this 
       purposeInput,
       arrangementConfig,
       vastuEnabled,
-      shuffle: shuffle || false,
+      shuffle: effectiveShuffle,
+      selectedStyle: selectedStyle ?? undefined,
+      selectedColorPalette: selectedColorPalette ?? undefined,
     })
     console.log('Generating image with prompt:', promptSummary)
 
-    // Generate the image using AI (or placeholder). In customization mode we pass only the current result so layout is preserved.
+    // Generate the image using AI (or placeholder). In customization/style-only mode we pass only the current result so layout is preserved; omit reference images in style-only mode so the new style/palette are not overridden by old references.
     const result = await generateImageWithAI(
       imagesForGeneration,
       prompt,
-      isCustomizationMode ? undefined : componentReferenceImages,
-      isCustomizationMode ? undefined : componentReferenceLabels,
-      isCustomizationMode ? undefined : fullRoomReferenceImages,
-      isCustomizationMode ? undefined : fullRoomAdditionalText,
+      isCustomizationMode || isStyleOnlyReconfigure ? undefined : componentReferenceImages,
+      isCustomizationMode || isStyleOnlyReconfigure ? undefined : componentReferenceLabels,
+      isCustomizationMode || isStyleOnlyReconfigure ? undefined : fullRoomReferenceImages,
+      isCustomizationMode || isStyleOnlyReconfigure ? undefined : fullRoomAdditionalText,
       configType === 'external' ? 'external' : 'internal',
-      shuffle || false,
-      !!isCustomizationMode,
-      customizationLabels && typeof customizationLabels === 'object' ? customizationLabels : undefined
+      effectiveShuffle,
+      !!isCustomizationMode || !!isStyleOnlyReconfigure,
+      customizationLabels && typeof customizationLabels === 'object' ? customizationLabels : undefined,
+      selectedStyle ?? undefined,
+      selectedColorPalette ?? undefined
     )
 
     const imageUrl = typeof result === 'string' ? result : result.imageUrl

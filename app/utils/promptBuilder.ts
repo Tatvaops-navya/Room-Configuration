@@ -44,6 +44,29 @@ interface PromptBuilderOptions {
 /** Max length for user-supplied text fields to avoid oversized prompts and filter risk. */
 const MAX_USER_TEXT_CHARS = 2000
 
+/** Palette id -> instruction text for image model and text prompts. Exported for use in API route when building image model prompt. */
+export const PALETTE_INSTRUCTIONS: Record<string, string> = {
+  surprise_me: 'Use a complementary color palette that fits the selected design style. Let the AI choose harmonious colors that enhance the style.',
+  high_contrast_neutrals: 'Apply a high-contrast neutral color palette: light grey, beige, off-white, and black or charcoal accents. Clean, sharp, modern finishes.',
+  forest_inspired: 'Apply a forest-inspired color palette: tan, dark brown, olive green, and natural wood tones. Earthy, organic, and natural materials.',
+  romance: 'Apply a soft romance color palette: pale pink, blush, light sage green, and muted brown or cream. Gentle, inviting, and soft finishes.',
+  ocean_breeze: 'Apply an ocean breeze palette: sky blue, aqua, soft teal, and deep ocean blue. Fresh, airy, coastal feel.',
+  sunset_warmth: 'Apply a sunset warmth palette: peach, terracotta, burnt orange, and deep rust. Warm, inviting, golden-hour mood.',
+  earth_tones: 'Apply earth tones: stone, taupe, warm grey, sand, and clay. Natural, grounded, and organic.',
+  monochrome: 'Apply a monochrome palette: clean whites, soft to charcoal greys, and black accents. Timeless, crisp, and elegant.',
+  jewel_tones: 'Apply jewel tones: amethyst, sapphire, emerald hints, deep purple and blue. Rich, luxurious, and bold.',
+  pastel_dreams: 'Apply soft pastels: pale pink, lavender, mint, peach, and sky blue. Light, dreamy, and gentle.',
+  industrial: 'Apply an industrial palette: concrete grey, warm metal, charcoal, and raw neutrals. Urban, utilitarian, and edgy.',
+  coastal_serenity: 'Apply coastal serenity: seafoam, soft teal, sand, and white. Relaxed, breezy, beach-house feel.',
+  autumn_harvest: 'Apply autumn harvest: amber, burnt orange, mustard, and warm brown. Cozy, seasonal, and warm.',
+  lavender_mist: 'Apply lavender mist: soft violet, lilac, lavender, and deep purple accents. Calm, serene, and refined.',
+}
+
+export function getPaletteInstruction(paletteId: string | null | undefined): string {
+  if (!paletteId?.trim()) return ''
+  return PALETTE_INSTRUCTIONS[paletteId.trim()] || 'Apply a cohesive color palette that complements the selected style.'
+}
+
 function capUserText(s: string | undefined): string {
   if (!s?.trim()) return ''
   return s.trim().length > MAX_USER_TEXT_CHARS ? s.trim().slice(0, MAX_USER_TEXT_CHARS) + ' [trimmed]' : s.trim()
@@ -232,37 +255,24 @@ export function buildPrompt(options: PromptBuilderOptions): string {
   // Build the user prompt based on configuration
   let userPrompt = buildUserPrompt(options)
 
-  // Inject design style at the start when user has selected one (interior and exterior)
+  // Inject design style and color palette together so both are applied (style + palette must both appear in output)
   const styleLabel = selectedStyle?.trim()
-  if (styleLabel) {
-    const styleCapitalized = styleLabel.charAt(0).toUpperCase() + styleLabel.slice(1)
-    userPrompt =
-      `Apply ${styleCapitalized} design style to the uploaded image with photorealistic rendering. The overall look, materials, colors, and mood should clearly reflect ${styleCapitalized} style.\n\n` +
-      userPrompt
-  }
-
-  // Inject color palette when user has selected one (optional; works with style)
   const paletteId = selectedColorPalette?.trim()
-  if (paletteId) {
-    const paletteInstructions: Record<string, string> = {
-      surprise_me: 'Use a complementary color palette that fits the selected design style. Let the AI choose harmonious colors that enhance the style.',
-      high_contrast_neutrals: 'Apply a high-contrast neutral color palette: light grey, beige, off-white, and black or charcoal accents. Clean, sharp, modern finishes.',
-      forest_inspired: 'Apply a forest-inspired color palette: tan, dark brown, olive green, and natural wood tones. Earthy, organic, and natural materials.',
-      romance: 'Apply a soft romance color palette: pale pink, blush, light sage green, and muted brown or cream. Gentle, inviting, and soft finishes.',
-      ocean_breeze: 'Apply an ocean breeze palette: sky blue, aqua, soft teal, and deep ocean blue. Fresh, airy, coastal feel.',
-      sunset_warmth: 'Apply a sunset warmth palette: peach, terracotta, burnt orange, and deep rust. Warm, inviting, golden-hour mood.',
-      earth_tones: 'Apply earth tones: stone, taupe, warm grey, sand, and clay. Natural, grounded, and organic.',
-      monochrome: 'Apply a monochrome palette: clean whites, soft to charcoal greys, and black accents. Timeless, crisp, and elegant.',
-      jewel_tones: 'Apply jewel tones: amethyst, sapphire, emerald hints, deep purple and blue. Rich, luxurious, and bold.',
-      pastel_dreams: 'Apply soft pastels: pale pink, lavender, mint, peach, and sky blue. Light, dreamy, and gentle.',
-      industrial: 'Apply an industrial palette: concrete grey, warm metal, charcoal, and raw neutrals. Urban, utilitarian, and edgy.',
-      coastal_serenity: 'Apply coastal serenity: seafoam, soft teal, sand, and white. Relaxed, breezy, beach-house feel.',
-      autumn_harvest: 'Apply autumn harvest: amber, burnt orange, mustard, and warm brown. Cozy, seasonal, and warm.',
-      lavender_mist: 'Apply lavender mist: soft violet, lilac, lavender, and deep purple accents. Calm, serene, and refined.',
+  const paletteText = getPaletteInstruction(selectedColorPalette)
+
+  if (styleLabel || paletteText) {
+    const styleCapitalized = styleLabel ? styleLabel.charAt(0).toUpperCase() + styleLabel.slice(1) : ''
+    const parts: string[] = []
+    if (styleLabel) {
+      parts.push(`Apply ${styleCapitalized} design style to the uploaded image with photorealistic rendering. The overall look, materials, and mood must clearly reflect ${styleCapitalized} style.`)
     }
-    const paletteText = paletteInstructions[paletteId] || `Apply a cohesive color palette that complements the selected style.`
-    userPrompt =
-      `${paletteText}\n\n` + userPrompt
+    if (paletteText) {
+      parts.push(paletteText)
+      parts.push('The OUTPUT must visibly use this color palette: walls, furniture, fabrics, rugs, accents, and decor should be in these colors. Do not use a different or generic color scheme; the selected palette must be clearly visible in the result.')
+    }
+    if (parts.length > 0) {
+      userPrompt = parts.join('\n\n') + '\n\n' + userPrompt
+    }
   }
 
   // Interior: append visual-only customization overrides (no geometry changes)

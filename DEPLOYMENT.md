@@ -18,7 +18,7 @@ This project is configured for one-click deployment on [Vercel](https://vercel.c
    |------|--------|----------|
    | `IMAGE_GENERATION_API_KEY` | Your Google Gemini API key | **Yes** |
    | `GEMINI_TEXT_MODEL` | e.g. `gemini-2.5-flash` | No |
-   | `GEMINI_IMAGE_MODEL` | e.g. `gemini-3.1-flash-image-preview` | No |
+   | `GEMINI_IMAGE_MODEL` | e.g. `gemini-3-pro-image-preview` | No |
    | `STABILITY_AI_API_KEY` or `REPLICATE_API_TOKEN` | For real image generation | No (app works with placeholders without these) |
 
 4. **Redeploy** after saving env vars (Deployments → … → Redeploy).

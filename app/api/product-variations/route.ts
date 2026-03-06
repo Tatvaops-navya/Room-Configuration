@@ -11,6 +11,9 @@ import { getSupabaseServer } from '@/app/lib/supabase'
 const INTERNAL_COMPONENTS: Record<string, string> = {
   wall: 'wall',
   floor: 'floor', // uses flooring_options table
+  ceiling: 'ceiling', // uses ceiling_options table
+  'glass-partition': 'glass-partition', // uses glass_partition_options table
+  decor: 'decor', // uses decor_options table
   sofa: 'sofa',
   door: 'door',
   window: 'window',
@@ -97,6 +100,101 @@ export async function GET(request: NextRequest) {
           const label = styleName || id
           const description = [material, texture, finish, category].filter(Boolean).join(', ') || label
           return { id, label, description, color: colorHex || undefined, material: material || undefined, texture: texture || undefined, finish: finish || undefined }
+        })
+        return NextResponse.json(list)
+      }
+
+      // Ceiling: use ceiling_options table (same schema as flooring_options)
+      if (component === 'ceiling') {
+        const { data: rows, error } = await supabase
+          .from('ceiling_options')
+          .select('*')
+          .order('id', { ascending: true })
+
+        if (error) {
+          console.error('Supabase ceiling_options error:', error)
+          return NextResponse.json(
+            { error: 'Failed to fetch ceiling options.', details: error.message },
+            { status: 502 }
+          )
+        }
+
+        const list = (rows ?? []).map((row: Record<string, unknown>) => {
+          const id = String(row.id ?? '')
+          const styleName = String(row.style_name ?? '')
+          const material = String(row.material ?? '')
+          const texture = String(row.texture ?? '')
+          const finish = String(row.finish ?? '')
+          const colorHex = String(row.color_hex ?? '')
+          const category = String(row.category ?? '')
+          const label = styleName || id
+          const description = [material, texture, finish, category].filter(Boolean).join(', ') || label
+          return { id, label, description, color: colorHex || undefined, material: material || undefined, texture: texture || undefined, finish: finish || undefined }
+        })
+        return NextResponse.json(list)
+      }
+
+      // Glass partition: use glass_partition_options table (id, color_hex, style_name, description, material, texture, finish, category)
+      if (component === 'glass-partition') {
+        const { data: rows, error } = await supabase
+          .from('glass_partition_options')
+          .select('*')
+          .order('id', { ascending: true })
+
+        if (error) {
+          console.error('Supabase glass_partition_options error:', error)
+          return NextResponse.json(
+            { error: 'Failed to fetch glass partition options.', details: error.message },
+            { status: 502 }
+          )
+        }
+
+        const list = (rows ?? []).map((row: Record<string, unknown>) => {
+          const id = String(row.id ?? '')
+          const styleName = String(row.style_name ?? '')
+          const desc = String(row.description ?? '')
+          let material = String(row.material ?? '')
+          // Don't show "Glass" in Material column: use empty for "Glass", or "Metal"/"Wood" for "Glass+Metal"/"Glass+Wood"
+          if (material === 'Glass') material = ''
+          else if (material === 'Glass+Metal') material = 'Metal'
+          else if (material === 'Glass+Wood') material = 'Wood'
+          const texture = String(row.texture ?? '')
+          const finish = String(row.finish ?? '')
+          const colorHex = String(row.color_hex ?? '')
+          const category = String(row.category ?? '')
+          const label = styleName || id
+          const description = desc || [material, texture, finish, category].filter(Boolean).join(', ') || label
+          return { id, label, description, color: colorHex || undefined, material: material || undefined, texture: texture || undefined, finish: finish || undefined }
+        })
+        return NextResponse.json(list)
+      }
+
+      // Decor: use decor_options table (id, color_hex, style_name, description, material, texture, category)
+      if (component === 'decor') {
+        const { data: rows, error } = await supabase
+          .from('decor_options')
+          .select('*')
+          .order('id', { ascending: true })
+
+        if (error) {
+          console.error('Supabase decor_options error:', error)
+          return NextResponse.json(
+            { error: 'Failed to fetch decor options.', details: error.message },
+            { status: 502 }
+          )
+        }
+
+        const list = (rows ?? []).map((row: Record<string, unknown>) => {
+          const id = String(row.id ?? '')
+          const styleName = String(row.style_name ?? '')
+          const desc = String(row.description ?? '')
+          const material = String(row.material ?? '')
+          const texture = String(row.texture ?? '')
+          const colorHex = String(row.color_hex ?? '')
+          const category = String(row.category ?? '')
+          const label = styleName || id
+          const description = desc || [material, texture, category].filter(Boolean).join(', ') || label
+          return { id, label, description, color: colorHex || undefined, material: material || undefined, texture: texture || undefined }
         })
         return NextResponse.json(list)
       }

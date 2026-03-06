@@ -23,6 +23,17 @@ import {
 } from './utils/externalCustomizationPresets'
 import { downloadImageWithLogo, applyWatermarkToImage } from './utils/downloadWithLogo'
 
+/** Parse response as JSON; if body is plain text (e.g. "An error occurred"), avoid "is not valid JSON" throw. */
+async function parseJsonOrText<T = unknown>(res: Response): Promise<T> {
+  const text = await res.text()
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    if (!res.ok) throw new Error(text || res.statusText || 'Request failed')
+    throw new Error('Invalid response from server')
+  }
+}
+
 // Map external UI category to API component (product_variations table)
 const EXTERNAL_CATEGORY_TO_COMPONENT: Record<ExternalCategory, string> = {
   facade: 'facade',
@@ -252,6 +263,9 @@ export default function Home() {
   const [comparisonBeforeImageUrl, setComparisonBeforeImageUrl] = useState<string | null>(null)
   // History of generated images for undo (last configuration/customization)
   const [generatedImageHistory, setGeneratedImageHistory] = useState<string[]>([])
+  // Generation history: last N generated results (newest first), for browsing and reloading
+  const [generationHistory, setGenerationHistory] = useState<string[]>([])
+  const MAX_GENERATION_HISTORY = 20
   // State for user favourites (saved generated images)
   const [favoriteImages, setFavoriteImages] = useState<string[]>([])
   
@@ -542,7 +556,7 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ images }),
     })
-      .then((res) => res.json())
+      .then((res) => parseJsonOrText<{ components?: unknown[]; fullReport?: string }>(res))
       .then((data) => {
         if (cancelled) return
         const comps = (data.components?.length ? data.components : fallbackComponents) as DetectedComponent[]
@@ -596,29 +610,25 @@ export default function Home() {
           expectedType: configType,
         }),
       })
-        .then((res) => {
-          if (!res.ok) {
-            return res.json()
-              .catch(() => ({}))
-              .then((data: { message?: string }) => ({
-                valid: false,
-                message: data?.message || 'Validation failed. Please upload the correct image type.',
-              }))
+        .then(async (res) => {
+          const text = await res.text()
+          let data: { valid?: boolean; message?: string } = {}
+          try {
+            data = JSON.parse(text)
+          } catch {
+            if (!res.ok) return { valid: false, message: text || 'Validation failed.' }
           }
-          return res.json()
+          return {
+            valid: res.ok && data.valid === true,
+            message: data?.message || (res.ok ? 'Images match.' : 'Image type does not match configuration.'),
+          }
         })
         .then((data) => {
           if (cancelled) return
-          const valid = data && data.valid === true
-          const message = data?.message || (valid ? 'Images match.' : 'Image type does not match configuration.')
-          setImageTypeValidation({ valid, message })
+          setImageTypeValidation({ valid: data.valid === true, message: data.message || '' })
         })
         .catch(() => {
-          // On any network/API error, allow the user to proceed rather than blocking them.
-          // The validation is a guide — we should not prevent generation because of a connectivity issue.
-          if (!cancelled) {
-            setImageTypeValidation({ valid: true, message: 'Images accepted.' })
-          }
+          if (!cancelled) setImageTypeValidation({ valid: true, message: 'Images accepted.' })
         })
         .finally(() => {
           if (!cancelled) setIsValidatingImageType(false)
@@ -636,8 +646,16 @@ export default function Home() {
     if (configType !== 'internal' || !selectedElementType || productVariations[selectedElementType] !== undefined) return
     setLoadingVariations(true)
     fetch(`/api/product-variations?component=${encodeURIComponent(selectedElementType)}&context=internal`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data: { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }[]) => {
+      .then(async (res) => {
+        const text = await res.text()
+        if (!res.ok) return []
+        try {
+          return JSON.parse(text) as { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }[]
+        } catch {
+          return []
+        }
+      })
+      .then((data) => {
         setProductVariations((prev) => ({ ...prev, [selectedElementType]: Array.isArray(data) ? data : [] }))
       })
       .catch(() => {
@@ -652,8 +670,16 @@ export default function Home() {
     const component = EXTERNAL_CATEGORY_TO_COMPONENT[selectedExternalCategory]
     setLoadingExternalVariations(true)
     fetch(`/api/product-variations?component=${encodeURIComponent(component)}&context=external`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data: { id: string; label: string; description: string }[]) => {
+      .then(async (res) => {
+        const text = await res.text()
+        if (!res.ok) return []
+        try {
+          return JSON.parse(text) as { id: string; label: string; description: string }[]
+        } catch {
+          return []
+        }
+      })
+      .then((data) => {
         setExternalProductVariations((prev) => ({ ...prev, [selectedExternalCategory]: Array.isArray(data) ? data : [] }))
       })
       .catch(() => {
@@ -714,12 +740,12 @@ export default function Home() {
     setFavoriteImages([])
   }
 
-  /**
-   * Add the current generated image to favourites
-   */
-  const handleAddFavorite = (imageUrl: string | null) => {
+  /** Toggle favourite for the current image (heart on image). Add if not in list, remove if already favourited. */
+  const toggleFavorite = (imageUrl: string | null) => {
     if (!imageUrl) return
-    setFavoriteImages((prev) => (prev.includes(imageUrl) ? prev : [...prev, imageUrl]))
+    setFavoriteImages((prev) =>
+      prev.includes(imageUrl) ? prev.filter((u) => u !== imageUrl) : [...prev, imageUrl]
+    )
   }
 
   /**
@@ -783,8 +809,11 @@ export default function Home() {
         (cat) => externalCustomization[cat] != null && externalCustomization[cat] !== ''
       )
       const hasCustomization = hasInternalCustomization || hasExternalCustomization
+      // Style-only regeneration: user changed style/palette in Edit and clicked Regenerate — send current result so the new style is applied to this image (works for both Full Room and Arrangement modes)
+      const hasStyleOrPalette = (selectedStyle != null && selectedStyle.trim() !== '') || (selectedColorPalette != null && selectedColorPalette.trim() !== '')
+      const useCurrentResultForStyleRegenerate = hasStyleOrPalette && !!(generatedImageOriginal ?? generatedImage)
       // For comparison: show "before customization" vs "after customization"; set before to current result now
-      if (hasCustomization && generatedImage) {
+      if ((hasCustomization || useCurrentResultForStyleRegenerate) && generatedImage) {
         setComparisonBeforeImageUrl(generatedImage)
       }
       // Build human-readable labels for each selected customization style so the AI gets
@@ -826,9 +855,8 @@ export default function Home() {
         selectedStyle: selectedStyle ?? undefined,
         selectedColorPalette: selectedColorPalette ?? undefined,
         layoutImageIndex: layoutReferenceImageIndex ?? 0,
-        // Always send the clean (non-watermarked) image to the API so the model isn't confused by
-        // watermarks, and so fallbacks return a clean image that "Remove watermark" can work from.
-        ...(hasCustomization && (generatedImageOriginal ?? generatedImage)
+        // Send current result when applying component customizations OR when doing style/palette-only regeneration so the new style is applied to the current image
+        ...((hasCustomization || useCurrentResultForStyleRegenerate) && (generatedImageOriginal ?? generatedImage)
           ? { currentResultImage: generatedImageOriginal ?? generatedImage }
           : {}),
       }
@@ -842,18 +870,25 @@ export default function Home() {
         body: JSON.stringify(payload),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate image')
+      const text = await response.text()
+      let data: { error?: string; imageUrl?: string; warning?: string }
+      try {
+        data = JSON.parse(text)
+      } catch {
+        throw new Error(response.ok ? 'Invalid response from server' : text || response.statusText || 'Failed to generate image')
       }
-
-      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data?.error || text || 'Failed to generate image')
+      }
+      const imageUrl = data.imageUrl
+      if (!imageUrl) throw new Error('No image URL in response')
       setWarning(data.warning ?? null)
       setGeneratedImageHistory((prev) => (generatedImage ? [...prev, generatedImage] : prev))
-      setGeneratedImageOriginal(data.imageUrl)
+      setGeneratedImageOriginal(imageUrl)
       setShowWatermark(true)
-      const watermarkedUrl = await applyWatermarkToImage(data.imageUrl)
+      const watermarkedUrl = await applyWatermarkToImage(imageUrl)
       setGeneratedImage(watermarkedUrl)
+      setGenerationHistory((prev) => [watermarkedUrl, ...prev.slice(0, MAX_GENERATION_HISTORY - 1)])
       // First generation (no customization): comparison left = layout reference
       if (!hasCustomization && images.length > 0) {
         const layoutIdx = layoutReferenceImageIndex ?? 0
@@ -994,18 +1029,25 @@ Important:
         body: JSON.stringify(payload),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate Vastu-based configuration')
+      const text = await response.text()
+      let data: { error?: string; imageUrl?: string; warning?: string }
+      try {
+        data = JSON.parse(text)
+      } catch {
+        throw new Error(response.ok ? 'Invalid response from server' : text || response.statusText || 'Failed to generate Vastu-based configuration')
       }
-
-      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data?.error || text || 'Failed to generate Vastu-based configuration')
+      }
+      const imageUrl = data.imageUrl
+      if (!imageUrl) throw new Error('No image URL in response')
       setWarning(data.warning ?? null)
       setGeneratedImageHistory((prev) => (generatedImage ? [...prev, generatedImage] : prev))
-      setGeneratedImageOriginal(data.imageUrl)
+      setGeneratedImageOriginal(imageUrl)
       setShowWatermark(true)
-      const watermarkedUrl = await applyWatermarkToImage(data.imageUrl)
+      const watermarkedUrl = await applyWatermarkToImage(imageUrl)
       setGeneratedImage(watermarkedUrl)
+      setGenerationHistory((prev) => [watermarkedUrl, ...prev.slice(0, MAX_GENERATION_HISTORY - 1)])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
     } finally {
@@ -1559,9 +1601,9 @@ Important:
                   }}
                 >
                   <div style={{ flex: '1 1 0', minWidth: '260px' }}>
-                    {/* Single output view: before vs after with draggable slider */}
+                    {/* Single output view: before vs after with draggable slider; heart on image to favourite */}
                     {(images.length > 0 || comparisonBeforeImageUrl) && (
-                      <div className="before-after-section before-after-primary">
+                      <div className="before-after-section before-after-primary" style={{ position: 'relative' }}>
                         <h3 className="before-after-heading">Compare before & after</h3>
                         <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
                           {comparisonBeforeImageUrl != null && images.length > 0 && comparisonBeforeImageUrl !== images[layoutReferenceImageIndex ?? 0]
@@ -1574,10 +1616,45 @@ Important:
                           beforeLabel={comparisonBeforeImageUrl != null && images.length > 0 && comparisonBeforeImageUrl !== images[layoutReferenceImageIndex ?? 0] ? 'Before (before customization)' : 'Before (layout reference)'}
                           afterLabel={comparisonBeforeImageUrl != null && images.length > 0 && comparisonBeforeImageUrl !== images[layoutReferenceImageIndex ?? 0] ? 'After (after customization)' : 'After (generated)'}
                         />
+                        {generatedImage && (
+                          <button
+                            type="button"
+                            onClick={() => toggleFavorite(generatedImage)}
+                            aria-label={favoriteImages.includes(generatedImage) ? 'Remove from favourites' : 'Add to favourites'}
+                            style={{
+                              position: 'absolute',
+                              top: '0.5rem',
+                              right: '0.5rem',
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              border: 'none',
+                              background: 'rgba(255,255,255,0.9)',
+                              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.25rem',
+                              color: favoriteImages.includes(generatedImage) ? '#e11d48' : '#94a3b8',
+                              transition: 'color 0.2s, transform 0.15s',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.transform = 'scale(1.08)'
+                              if (!favoriteImages.includes(generatedImage)) e.currentTarget.style.color = '#e11d48'
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.transform = 'scale(1)'
+                              if (!favoriteImages.includes(generatedImage)) e.currentTarget.style.color = '#94a3b8'
+                            }}
+                          >
+                            {favoriteImages.includes(generatedImage) ? '♥' : '♡'}
+                          </button>
+                        )}
                       </div>
                     )}
 
-                    {/* Action bar: Download, Favourite, Restart, Customize, Edit */}
+                    {/* Action bar: Download, Restart, Customize, Edit (favourite = heart on image) */}
                     <div className="result-actions">
                       <button
                         type="button"
@@ -1623,14 +1700,6 @@ Important:
                       <button
                         type="button"
                         className="button button-secondary"
-                        onClick={() => handleAddFavorite(generatedImage)}
-                        disabled={isGenerating}
-                      >
-                        ★ Favourite
-                      </button>
-                      <button
-                        type="button"
-                        className="button button-secondary"
                         onClick={handleRestart}
                         disabled={isGenerating}
                       >
@@ -1645,7 +1714,9 @@ Important:
                             const next = !v
                             if (next) {
                               setCustomClickPosition(null)
-                              setSelectedElementType(null)
+                              // Internal: default to Wall so user can select multiple components (wall, floor, ceiling, etc.) then Apply once
+                              if (configType === 'internal') setSelectedElementType('wall')
+                              else setSelectedElementType(null)
                               if (configType === 'external') setSelectedExternalCategory('facade')
                             }
                             return next
@@ -1879,204 +1950,218 @@ Important:
                             </div>
                           </>
                         ) : (
-                          /* Internal: click + element chips + presets */
+                          /* Internal: component chips + material library (no image click required); single Apply all */
                           <>
-                            {!customClickPosition && (
-                              <>
-                                <p style={{ fontSize: '0.85rem', color: '#4b5563', marginBottom: '0.5rem' }}>
-                                  Click on the result image below to choose the area to customize (e.g. sofa, wall, floor). Then pick what to change.
-                                </p>
-                                <div
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={(e) => {
-                                    const target = e.currentTarget.querySelector('img')
-                                    if (!target) return
-                                    const rect = target.getBoundingClientRect()
-                                    const x = (e.clientX - rect.left) / rect.width
-                                    const y = (e.clientY - rect.top) / rect.height
-                                    setCustomClickPosition({ x: Math.min(Math.max(x, 0), 1), y: Math.min(Math.max(y, 0), 1) })
-                                    if (!selectedElementType) setSelectedElementType('wall')
-                                  }}
-                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click() }}
-                                  style={{ cursor: 'crosshair', display: 'inline-block', maxWidth: '320px', borderRadius: '8px', overflow: 'hidden', border: '2px solid var(--color-border)' }}
-                                >
-                                  <img src={generatedImage} alt="Result – click to select area" style={{ display: 'block', width: '100%', height: 'auto', pointerEvents: 'none' }} />
-                                </div>
-                              </>
-                            )}
-                            {customClickPosition && (
-                              <>
-                                <div
+                            <p style={{ fontSize: '0.85rem', color: '#4b5563', marginBottom: '0.5rem' }}>
+                              Select component types below (wall, floor, ceiling, door, etc.), pick a style for each, then click <strong>Apply all customizations</strong> once to regenerate the room with all selections.
+                            </p>
+                            {/* Optional: click image to set focus point */}
+                            <div style={{ marginBottom: '0.75rem' }}>
+                              <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.35rem' }}>Optional: click image to set focus area for generation</p>
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                onClick={(e) => {
+                                  const target = e.currentTarget.querySelector('img')
+                                  if (!target) return
+                                  const rect = target.getBoundingClientRect()
+                                  const x = (e.clientX - rect.left) / rect.width
+                                  const y = (e.clientY - rect.top) / rect.height
+                                  setCustomClickPosition({ x: Math.min(Math.max(x, 0), 1), y: Math.min(Math.max(y, 0), 1) })
+                                }}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click() }}
+                                style={{ cursor: 'crosshair', display: 'inline-block', maxWidth: '240px', borderRadius: '8px', overflow: 'hidden', border: '2px solid var(--color-border)' }}
+                              >
+                                <img src={generatedImage} alt="Result – optional click to focus" style={{ display: 'block', width: '100%', height: 'auto', pointerEvents: 'none' }} />
+                              </div>
+                            </div>
+                            {/* Component type chips – always visible */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '0.5rem',
+                                marginBottom: '0.75rem',
+                              }}
+                            >
+                              {(Object.keys(CUSTOMIZATION_LIBRARY) as CustomElementType[]).map((type) => (
+                                <button
+                                  key={type}
+                                  type="button"
+                                  className="button button-secondary"
                                   style={{
-                                    display: 'flex',
-                                    flexWrap: 'wrap',
-                                    gap: '0.5rem',
-                                    marginBottom: '0.75rem',
-                                    marginTop: '0.75rem',
+                                    padding: '0.3rem 0.7rem',
+                                    fontSize: '0.8rem',
+                                    background: selectedElementType === type ? 'rgba(59, 130, 246, 0.12)' : undefined,
+                                    borderColor: selectedElementType === type ? '#3b82f6' : undefined,
                                   }}
+                                  onClick={() => setSelectedElementType(type)}
                                 >
-                                  {(Object.keys(CUSTOMIZATION_LIBRARY) as CustomElementType[]).map((type) => (
-                                    <button
-                                      key={type}
-                                      type="button"
-                                      className="button button-secondary"
-                                      style={{
-                                        padding: '0.3rem 0.7rem',
-                                        fontSize: '0.8rem',
-                                        background: selectedElementType === type ? 'rgba(59, 130, 246, 0.12)' : undefined,
-                                        borderColor: selectedElementType === type ? '#3b82f6' : undefined,
-                                      }}
-                                      onClick={() => setSelectedElementType(type)}
-                                    >
-                                      {type === 'glass-partition' ? 'Glass partition' : type.charAt(0).toUpperCase() + type.slice(1)}
-                                    </button>
-                                  ))}
-                                </div>
-                                {selectedElementType && (
-                                  <>
-                                    <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>
-                                      <strong>
-                                        {selectedElementType === 'glass-partition' ? 'Glass partition' : selectedElementType.charAt(0).toUpperCase() + selectedElementType.slice(1)} selected
-                                      </strong>
-                                    </p>
-                                    {loadingVariations ? (
-                                      <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.6rem' }}>Loading variations from catalog…</p>
-                                    ) : (
-                                    <div style={{ marginBottom: '0.6rem', overflowX: 'auto' }}>
-                                      <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#1e40af', marginBottom: '0.5rem' }}>
-                                        Material Library: {selectedElementType === 'glass-partition' ? 'Glass partition' : selectedElementType.charAt(0).toUpperCase() + selectedElementType.slice(1)} Styles
-                                      </h3>
-                                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-                                        <thead>
-                                          <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Color</th>
-                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Style Name</th>
-                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Material</th>
-                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Texture</th>
-                                            <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontWeight: 600, color: '#475569' }}></th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {(productVariations[selectedElementType]?.length ? productVariations[selectedElementType]! : CUSTOMIZATION_LIBRARY[selectedElementType]).map((opt: { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }) => {
-                                            const materialRaw = (opt.material ?? '').trim()
-                                            const finish = (opt.finish ?? '').trim()
-                                            const genericMaterial = ['fabric', 'paint'].includes(materialRaw.toLowerCase())
-                                            const materialDisplay = genericMaterial
-                                              ? (finish || '—')
-                                              : [materialRaw, finish].filter(Boolean).join(', ') || '—'
-                                            const color = opt.color ?? '—'
-                                            const texture = opt.texture ?? '—'
-                                            const swatchHex = swatchHexFromOption(opt)
-                                            const isSelected = customStyles[selectedElementType] === opt.id
-                                            return (
-                                              <tr
-                                                key={opt.id}
+                                  {type === 'glass-partition' ? 'Glass partition' : type.charAt(0).toUpperCase() + type.slice(1)}
+                                </button>
+                              ))}
+                            </div>
+                            {selectedElementType && (
+                              <>
+                                <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>
+                                  <strong>
+                                    {selectedElementType === 'glass-partition' ? 'Glass partition' : selectedElementType.charAt(0).toUpperCase() + selectedElementType.slice(1)} – pick a style
+                                  </strong>
+                                </p>
+                                {loadingVariations ? (
+                                  <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.6rem' }}>Loading variations from catalog…</p>
+                                ) : (
+                                <div style={{ marginBottom: '0.6rem', overflowX: 'auto' }}>
+                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                                    <thead>
+                                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Color</th>
+                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Style Name</th>
+                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Material</th>
+                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Texture</th>
+                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontWeight: 600, color: '#475569' }}></th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(productVariations[selectedElementType]?.length ? productVariations[selectedElementType]! : CUSTOMIZATION_LIBRARY[selectedElementType]).map((opt: { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }) => {
+                                        const materialRaw = (opt.material ?? '').trim()
+                                        const finish = (opt.finish ?? '').trim()
+                                        const genericMaterial = ['fabric', 'paint'].includes(materialRaw.toLowerCase())
+                                        const materialDisplay = genericMaterial
+                                          ? (finish || '—')
+                                          : [materialRaw, finish].filter(Boolean).join(', ') || '—'
+                                        const texture = opt.texture ?? '—'
+                                        const swatchHex = swatchHexFromOption(opt)
+                                        const isSelected = customStyles[selectedElementType] === opt.id
+                                        return (
+                                          <tr
+                                            key={opt.id}
+                                            style={{
+                                              borderBottom: '1px solid #f1f5f9',
+                                              background: isSelected ? 'rgba(16, 185, 129, 0.06)' : undefined,
+                                            }}
+                                          >
+                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
+                                              <div style={{ width: 48, height: 48, borderRadius: '6px', background: swatchHex, border: '1px solid #e2e8f0' }} title={String(opt.label)} />
+                                            </td>
+                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
+                                              <div style={{ fontWeight: 600 }}>{String(opt.label)}</div>
+                                              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.1rem' }}>{String(opt.description)}</div>
+                                            </td>
+                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{materialDisplay}</td>
+                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{texture}</td>
+                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', textAlign: 'center' }}>
+                                              <button
+                                                type="button"
+                                                className="button button-secondary"
                                                 style={{
-                                                  borderBottom: '1px solid #f1f5f9',
-                                                  background: isSelected ? 'rgba(16, 185, 129, 0.06)' : undefined,
+                                                  padding: '0.35rem 0.6rem',
+                                                  fontSize: '0.75rem',
+                                                  background: isSelected ? '#10b981' : '#2563eb',
+                                                  color: '#fff',
+                                                  border: 'none',
+                                                }}
+                                                onClick={() => {
+                                                  setCustomHistory((prev) => [...prev, { ...customStyles }])
+                                                  setCustomStyles((prev) => ({ ...prev, [selectedElementType]: opt.id }))
                                                 }}
                                               >
-                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
-                                                  <div style={{ width: 48, height: 48, borderRadius: '6px', background: swatchHex, border: '1px solid #e2e8f0' }} title={String(opt.label)} />
-                                                </td>
-                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
-                                                  <div style={{ fontWeight: 600 }}>{String(opt.label)}</div>
-                                                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.1rem' }}>{String(opt.description)}</div>
-                                                </td>
-                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{materialDisplay}</td>
-                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{texture}</td>
-                                                <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', textAlign: 'center' }}>
-                                                  <button
-                                                    type="button"
-                                                    className="button button-secondary"
-                                                    style={{
-                                                      padding: '0.35rem 0.6rem',
-                                                      fontSize: '0.75rem',
-                                                      background: isSelected ? '#10b981' : '#2563eb',
-                                                      color: '#fff',
-                                                      border: 'none',
-                                                    }}
-                                                    onClick={() => {
-                                                      setCustomHistory((prev) => [...prev, { ...customStyles }])
-                                                      setCustomStyles((prev) => ({ ...prev, [selectedElementType]: opt.id }))
-                                                    }}
-                                                  >
-                                                    Select
-                                                  </button>
-                                                </td>
-                                              </tr>
-                                            )
-                                          })}
-                                        </tbody>
-                                      </table>
-                                      <div style={{ marginTop: '0.75rem', display: 'flex', justifyContent: 'flex-end' }}>
-                                        <button
-                                          type="button"
-                                          className="button"
-                                          disabled={isGenerating}
-                                          style={{ padding: '0.5rem 1rem', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 600, fontSize: '0.85rem' }}
-                                          onClick={() => {
-                                            if (configType === 'vastu') void handleGenerateVastu()
-                                            else void handleGenerate()
-                                          }}
-                                        >
-                                          APPLY
-                                        </button>
-                                      </div>
-                                    </div>
-                                    )}
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
-                                      <button
-                                        type="button"
-                                        className="button button-secondary"
-                                        onClick={() => {
-                                          if (!selectedElementType) return
-                                          setCustomHistory((prev) => [...prev, { ...customStyles }])
-                                          setCustomStyles((prev) => ({ ...prev, [selectedElementType]: null }))
-                                        }}
-                                      >
-                                        Reset selected element
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="button button-secondary"
-                                        disabled={customHistory.length === 0 && generatedImageHistory.length === 0}
-                                        onClick={() => {
-                                          setCustomHistory((prev) => {
-                                            if (prev.length === 0) return prev
-                                            const last = prev[prev.length - 1]
-                                            setCustomStyles(last)
-                                            return prev.slice(0, prev.length - 1)
-                                          })
-                                          setGeneratedImageHistory((prev) => {
-                                            if (prev.length === 0) return prev
-                                            const lastImage = prev[prev.length - 1]
-                                            setGeneratedImage(lastImage)
-                                            return prev.slice(0, prev.length - 1)
-                                          })
-                                        }}
-                                      >
-                                        Undo last change
-                                      </button>
-                                    </div>
-                                    <div style={{ marginTop: '0.75rem', fontSize: '0.8rem' }}>
-                                      <button
-                                        type="button"
-                                        className="button"
-                                        disabled={isGenerating}
-                                        onClick={() => {
-                                          if (configType === 'vastu') void handleGenerateVastu()
-                                          else void handleGenerate()
-                                        }}
-                                      >
-                                        Apply customization (regenerate)
-                                      </button>
-                                    </div>
-                                  </>
+                                                Select
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        )
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
                                 )}
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                                  <button
+                                    type="button"
+                                    className="button button-secondary"
+                                    onClick={() => {
+                                      if (!selectedElementType) return
+                                      setCustomHistory((prev) => [...prev, { ...customStyles }])
+                                      setCustomStyles((prev) => ({ ...prev, [selectedElementType]: null }))
+                                    }}
+                                  >
+                                    Reset {selectedElementType}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="button button-secondary"
+                                    disabled={customHistory.length === 0 && generatedImageHistory.length === 0}
+                                    onClick={() => {
+                                      setCustomHistory((prev) => {
+                                        if (prev.length === 0) return prev
+                                        const last = prev[prev.length - 1]
+                                        setCustomStyles(last)
+                                        return prev.slice(0, prev.length - 1)
+                                      })
+                                      setGeneratedImageHistory((prev) => {
+                                        if (prev.length === 0) return prev
+                                        const lastImage = prev[prev.length - 1]
+                                        setGeneratedImage(lastImage)
+                                        return prev.slice(0, prev.length - 1)
+                                      })
+                                    }}
+                                  >
+                                    Undo last change
+                                  </button>
+                                </div>
                               </>
                             )}
+                            {/* Your selections summary */}
+                            {(Object.keys(customStyles) as CustomElementType[]).some((k) => customStyles[k] != null) && (
+                              <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.25)', fontSize: '0.85rem' }}>
+                                <strong style={{ color: '#0f766e' }}>Your selections</strong>
+                                <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.2rem', color: '#134e4a' }}>
+                                  {(Object.keys(customStyles) as CustomElementType[]).map((type) => {
+                                    const id = customStyles[type]
+                                    if (id == null) return null
+                                    const opts = productVariations[type]?.length ? productVariations[type]! : CUSTOMIZATION_LIBRARY[type]
+                                    const label = opts?.find((o: { id: string }) => o.id === id)?.label ?? id
+                                    const typeLabel = type === 'glass-partition' ? 'Glass partition' : type.charAt(0).toUpperCase() + type.slice(1)
+                                    return (
+                                      <li key={type}>
+                                        {typeLabel}: {label}
+                                      </li>
+                                    )
+                                  })}
+                                </ul>
+                              </div>
+                            )}
+                            {/* Single Apply all customizations button */}
+                            <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                              <button
+                                type="button"
+                                className="button"
+                                disabled={isGenerating}
+                                style={{
+                                  padding: '0.55rem 1.1rem',
+                                  background: (Object.keys(customStyles) as CustomElementType[]).some((k) => customStyles[k] != null) ? '#0d9488' : '#94a3b8',
+                                  color: '#fff',
+                                  border: 'none',
+                                  borderRadius: '6px',
+                                  fontWeight: 600,
+                                  fontSize: '0.9rem',
+                                }}
+                                onClick={() => {
+                                  if (configType === 'vastu') void handleGenerateVastu()
+                                  else void handleGenerate()
+                                }}
+                              >
+                                {isGenerating ? (
+                                  <>
+                                    <span className="spinner" aria-hidden style={{ marginRight: '0.35rem' }} />
+                                    Applying…
+                                  </>
+                                ) : (
+                                  'Apply all customizations'
+                                )}
+                              </button>
+                            </div>
                           </>
                         )}
                       </div>
@@ -2146,57 +2231,166 @@ Important:
                     </div>
                   )}
 
-                  {favoriteImages.length > 0 && (
+                  {generationHistory.length > 0 && (
                     <div
+                      className="card"
                       style={{
-                        flex: '0 0 220px',
-                        maxWidth: '260px',
+                        flex: '0 0 240px',
+                        maxWidth: '280px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        padding: '1rem',
                       }}
                     >
-                      <div className="step-title-row" style={{ marginBottom: '0.5rem' }}>
-                        <h2 style={{ fontSize: '1rem' }}>Your favourites</h2>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <h2 style={{ fontSize: '1.05rem', margin: 0 }}>Generation history</h2>
+                        <span
+                          style={{
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            color: '#64748b',
+                            background: '#f1f5f9',
+                            padding: '0.2rem 0.5rem',
+                            borderRadius: '999px',
+                          }}
+                        >
+                          {generationHistory.length} {generationHistory.length === 1 ? 'version' : 'versions'}
+                        </span>
                       </div>
-                      <p className="hint-text" style={{ marginBottom: '0.6rem', fontSize: '0.85rem' }}>
-                        Click a favourite to load it in the main preview.
+                      <p className="hint-text" style={{ marginBottom: '0.75rem', fontSize: '0.8rem', lineHeight: 1.35 }}>
+                        First generated is V1. Click a version to load it; ♡ to mark as favourite.
                       </p>
                       <div
                         style={{
                           display: 'flex',
                           flexDirection: 'column',
-                          gap: '0.5rem',
-                          maxHeight: '420px',
+                          gap: '0.6rem',
+                          maxHeight: '340px',
                           overflowY: 'auto',
+                          paddingRight: '2px',
                         }}
                       >
-                        {favoriteImages.map((url, index) => (
-                          <button
-                            key={`${url}-${index}`}
-                            type="button"
-                            onClick={() => setGeneratedImage(url)}
-                            style={{
-                              border: '1px solid var(--color-border, #e2e8f0)',
-                              borderRadius: '0.5rem',
-                              padding: 0,
-                              overflow: 'hidden',
-                              background: 'transparent',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <img
-                              src={url}
-                              alt={`Favourite configuration ${index + 1}`}
+                        {[...generationHistory].reverse().map((url, index) => {
+                          const versionNumber = index + 1
+                          const isCurrent = generatedImage === url
+                          const originalIndex = generationHistory.length - 1 - index
+                          return (
+                            <button
+                              key={`history-${originalIndex}-${url.slice(0, 30)}`}
+                              type="button"
+                              onClick={() => setGeneratedImage(url)}
+                              aria-pressed={isCurrent}
+                              aria-label={`Version ${versionNumber}${isCurrent ? ' (current)' : ''}`}
                               style={{
-                                display: 'block',
-                                width: '100%',
-                                height: '90px',
-                                objectFit: 'cover',
+                                position: 'relative',
+                                border: isCurrent ? '2px solid #2563eb' : '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                padding: 0,
+                                overflow: 'hidden',
+                                background: isCurrent ? 'rgba(37, 99, 235, 0.08)' : '#fff',
+                                cursor: 'pointer',
+                                boxShadow: isCurrent ? '0 2px 8px rgba(37, 99, 235, 0.15)' : '0 1px 3px rgba(0,0,0,0.06)',
+                                transition: 'border-color 0.15s, box-shadow 0.15s, background 0.15s',
                               }}
-                            />
-                          </button>
-                        ))}
+                              onMouseEnter={(e) => {
+                                if (!isCurrent) {
+                                  e.currentTarget.style.borderColor = '#94a3b8'
+                                  e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.08)'
+                                }
+                              }}
+                              onMouseLeave={(e) => {
+                                if (!isCurrent) {
+                                  e.currentTarget.style.borderColor = '#e2e8f0'
+                                  e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.06)'
+                                }
+                              }}
+                            >
+                              <div style={{ position: 'relative' }}>
+                                <img
+                                  src={url}
+                                  alt={`Version ${versionNumber}`}
+                                  style={{
+                                    display: 'block',
+                                    width: '100%',
+                                    height: '96px',
+                                    objectFit: 'cover',
+                                  }}
+                                />
+                                <span
+                                  style={{
+                                    position: 'absolute',
+                                    top: '6px',
+                                    left: '6px',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    color: '#fff',
+                                    background: 'rgba(0,0,0,0.6)',
+                                    padding: '0.15rem 0.4rem',
+                                    borderRadius: '4px',
+                                  }}
+                                >
+                                  v{versionNumber}
+                                </span>
+                                {isCurrent && (
+                                  <span
+                                    style={{
+                                      position: 'absolute',
+                                      bottom: '6px',
+                                      right: '6px',
+                                      fontSize: '0.65rem',
+                                      fontWeight: 700,
+                                      color: '#fff',
+                                      background: '#2563eb',
+                                      padding: '0.2rem 0.45rem',
+                                      borderRadius: '4px',
+                                    }}
+                                  >
+                                    Current
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  aria-label={favoriteImages.includes(url) ? 'Remove from favourites' : 'Add to favourites'}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    toggleFavorite(url)
+                                  }}
+                                  style={{
+                                    position: 'absolute',
+                                    top: '6px',
+                                    right: '6px',
+                                    width: '28px',
+                                    height: '28px',
+                                    borderRadius: '50%',
+                                    border: 'none',
+                                    background: 'rgba(255,255,255,0.95)',
+                                    boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '0.95rem',
+                                    color: favoriteImages.includes(url) ? '#e11d48' : '#94a3b8',
+                                  }}
+                                >
+                                  {favoriteImages.includes(url) ? '♥' : '♡'}
+                                </button>
+                              </div>
+                            </button>
+                          )
+                        })}
                       </div>
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        style={{ marginTop: '0.75rem', fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                        onClick={() => setGenerationHistory([])}
+                      >
+                        Clear history
+                      </button>
                     </div>
                   )}
+
                 </div>
               </div>
             )}
