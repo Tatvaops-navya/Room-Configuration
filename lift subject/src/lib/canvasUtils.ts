@@ -165,8 +165,6 @@ export function loadCatalogImageForReplacement(
 
 const COMPOSITE_ALPHA_THRESHOLD = 20
 const BACKGROUND_COLOR_DISTANCE = 35
-const MASK_HARD_CUTOFF = 128
-const MASK_SOFT_EDGE_END = 204
 
 function colorDistance(
   r1: number, g1: number, b1: number,
@@ -882,7 +880,7 @@ export function applyVariationTintToDataUrl(
   finish: string
 ): Promise<string> {
   const targetRgb = COLOR_NAME_TO_RGB[color] ?? [200, 200, 200]
-  const [tH, tS, tL] = rgbToHsl(targetRgb[0], targetRgb[1], targetRgb[2])
+  const [tH, tS] = rgbToHsl(targetRgb[0], targetRgb[1], targetRgb[2])
   const strength = 0.7
   const finishFactor = finish === 'Matte' ? 0.96 : finish === 'Satin' || finish === 'Eggshell' ? 1 : 1.04
   return new Promise((resolve, reject) => {
@@ -957,52 +955,6 @@ function regionAroundClick(
   return { x, y, width, height }
 }
 
-/**
- * Apply an external mask image to the crop: set crop alpha = mask luminance.
- * Used only for non-SAM path (region-growing crop).
- */
-function applyMaskImageToCrop(
-  cropDataUrl: string,
-  maskImageUrl: string
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onerror = () => reject(new Error('Failed to load crop'))
-    img.onload = () => {
-      const maskImg = new Image()
-      maskImg.crossOrigin = 'anonymous'
-      maskImg.onerror = () => reject(new Error('Failed to load mask'))
-      maskImg.onload = () => {
-        const w = img.naturalWidth
-        const h = img.naturalHeight
-        const canvas = document.createElement('canvas')
-        canvas.width = w
-        canvas.height = h
-        const ctx = canvas.getContext('2d')!
-        ctx.drawImage(img, 0, 0)
-        const imageData = ctx.getImageData(0, 0, w, h)
-        const maskCanvas = document.createElement('canvas')
-        maskCanvas.width = w
-        maskCanvas.height = h
-        const mctx = maskCanvas.getContext('2d')!
-        mctx.drawImage(maskImg, 0, 0, w, h)
-        const maskData = mctx.getImageData(0, 0, w, h).data
-        for (let i = 0; i < w * h; i++) {
-          const r = maskData[i * 4]
-          const g = maskData[i * 4 + 1]
-          const b = maskData[i * 4 + 2]
-          const a = maskData[i * 4 + 3]
-          imageData.data[i * 4 + 3] = a > 0 ? Math.round((r + g + b) / 3) : 0
-        }
-        ctx.putImageData(imageData, 0, 0)
-        resolve(canvas.toDataURL('image/png'))
-      }
-      maskImg.src = maskImageUrl
-    }
-    img.src = cropDataUrl
-  })
-}
 
 /**
  * Generate a precise object mask for the crop using region growing only.
@@ -1415,8 +1367,7 @@ async function extractWithFullImageSam(
   clickY: number,
   imageWidth: number,
   imageHeight: number,
-  region: Region,
-  objectPrompt?: string
+  region: Region
 ): Promise<ExtractResult> {
   if (import.meta.env.DEV) {
     console.debug('[segmentation] bbox coordinates:', region.x, region.y, region.width, region.height)
@@ -1492,7 +1443,7 @@ export function extractComponentAtPoint(
 ): Promise<ExtractResult> {
   if (isSamConfigured()) {
     return resolveRegion(imageDataUrl, clickX, clickY, imageWidth, imageHeight, objectPrompt).then(
-      (region) => extractWithFullImageSam(imageDataUrl, clickX, clickY, imageWidth, imageHeight, region, objectPrompt)
+      (region) => extractWithFullImageSam(imageDataUrl, clickX, clickY, imageWidth, imageHeight, region)
     )
   }
 
@@ -1559,6 +1510,7 @@ export function extractComponentFromRegion(
   objectPrompt?: string,
   seedPoint?: { x: number; y: number }
 ): Promise<ExtractResult> {
+  void objectPrompt
   const clickX = seedPoint?.x ?? region.x + region.width / 2
   const clickY = seedPoint?.y ?? region.y + region.height / 2
   if (isSamConfigured()) {
@@ -1568,8 +1520,7 @@ export function extractComponentFromRegion(
       clickY,
       imageWidth,
       imageHeight,
-      region,
-      objectPrompt
+      region
     )
   }
   const seedX = Math.max(1, Math.floor((seedPoint?.x ?? (region.x + region.width / 2)) - region.x))

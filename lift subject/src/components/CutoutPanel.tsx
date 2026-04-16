@@ -73,10 +73,6 @@ export function CutoutPanel() {
                   onPreset={() => dispatch({ type: 'SET_ACTIVE_PANEL', payload: 'preset' })}
                   onAI={() => dispatch({ type: 'SET_ACTIVE_PANEL', payload: 'ai' })}
                   onReplace={() => dispatch({ type: 'SET_ACTIVE_PANEL', payload: 'replace' })}
-                  onCopy={() => addToast('Copied to clipboard', 'success')}
-                  onDownload={() => downloadCutout(comp)}
-                  onHide={() => dispatch({ type: 'TOGGLE_COMPONENT_SELECTION', payload: comp.id })}
-                  onDelete={() => dispatch({ type: 'REMOVE_COMPONENT', payload: comp.id })}
                 />
               ))}
             </section>
@@ -151,10 +147,6 @@ function CutoutCard({
   onPreset,
   onAI,
   onReplace,
-  onCopy,
-  onDownload,
-  onHide,
-  onDelete,
 }: {
   component: { id: string; name: string; region: { width: number; height: number; x?: number; y?: number }; confidence: number; cutoutDataUrl: string | null; maskDataUrl?: string | null }
   debugMask: boolean
@@ -163,10 +155,6 @@ function CutoutCard({
   onPreset: () => void
   onAI: () => void
   onReplace: () => void
-  onCopy: () => void
-  onDownload: () => void
-  onHide: () => void
-  onDelete: () => void
 }) {
   return (
     <div className="rounded-xl border-2 border-dashed border-[var(--neutral-200)] bg-gradient-to-b from-[var(--neutral-50)] to-white overflow-hidden shadow-md animate-fade-scale-in hover:shadow-lg hover:border-[var(--neutral-300)] transition-all duration-200 cutout-card">

@@ -36,7 +36,8 @@ export function MainCanvas() {
 
   // Composite main room image: original + each component's current cutout at its region
   useEffect(() => {
-    if (!image.originalDataUrl || !image.width || !image.height || !canvasRef.current) return
+    const originalDataUrl = image.originalDataUrl
+    if (!originalDataUrl || !image.width || !image.height || !canvasRef.current) return
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
@@ -44,7 +45,7 @@ export function MainCanvas() {
     let cancelled = false
     ;(async () => {
       try {
-        const baseImg = await loadImage(image.originalDataUrl)
+        const baseImg = await loadImage(originalDataUrl)
         if (cancelled) return
         canvas.width = image.width
         canvas.height = image.height
@@ -59,7 +60,7 @@ export function MainCanvas() {
         }
       } catch {
         if (!cancelled && canvasRef.current) {
-          const baseImg = await loadImage(image.originalDataUrl)
+          const baseImg = await loadImage(originalDataUrl)
           canvas.width = image.width
           canvas.height = image.height
           canvas.getContext('2d')?.drawImage(baseImg, 0, 0)

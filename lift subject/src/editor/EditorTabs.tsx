@@ -2,7 +2,6 @@ import { useApp } from '../context/AppContext'
 import { PresetTab } from './PresetTab'
 import { AITab } from './AITab'
 import { ReplaceTab } from './ReplaceTab'
-import type { ActivePanel } from '../types'
 
 const TABS: { id: 'preset' | 'ai' | 'replace'; label: string }[] = [
   { id: 'preset', label: 'Preset' },

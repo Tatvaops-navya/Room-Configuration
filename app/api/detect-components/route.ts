@@ -83,7 +83,7 @@ function parseSceneFromResponse(text: string): { roomType: string | null; compon
           .map((s) => normalizeSlug(s))
           .filter(Boolean)
       }
-      const dedup = [...new Set(components)]
+      const dedup = Array.from(new Set(components))
       const rt = roomType ?? ''
       if ((rt.includes('bedroom') || rt === 'bed-room') && !dedup.includes('bed')) {
         dedup.unshift('bed')

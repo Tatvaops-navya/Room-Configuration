@@ -8,9 +8,10 @@ import { X, Palette, Sparkles, Replace } from 'lucide-react'
 export function EditingPanel() {
   const { state, dispatch } = useApp()
   const panel = state.selection.activePanel
-  const [localTab, setLocalTab] = useState<'preset' | 'ai' | 'replace'>(panel || 'preset')
+  const panelTab = panel === 'preset' || panel === 'ai' || panel === 'replace' ? panel : null
+  const [localTab, setLocalTab] = useState<'preset' | 'ai' | 'replace'>(panelTab ?? 'preset')
 
-  const activeTab = panel ?? localTab
+  const activeTab = panelTab ?? localTab
   const hasSelection = state.selection.activeComponentIds.length > 0
   const isOpen = Boolean(panel) && hasSelection
 

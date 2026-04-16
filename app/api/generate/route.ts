@@ -1166,13 +1166,16 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
     
   } catch (error) {
     console.error('Error in image generation:', error)
-    return {
-      imageUrl: generatePlaceholderImage(images, prompt),
-      warning:
-        error instanceof Error
-          ? `Image generation failed (${error.message}). Your original image is shown.`
-          : 'Image generation failed. Your original image is shown.',
+    const message = error instanceof Error ? error.message : 'Image generation failed'
+    // Do not silently return the same placeholder image on transient model outages.
+    // Surface a retryable error to the UI so users understand generation did not run.
+    if (
+      /Gemini API error:\s*(429|500|502|503|504)/i.test(message) ||
+      /UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|temporar/i.test(message)
+    ) {
+      throw new Error('Image model is temporarily unavailable (high demand). Please retry in a few seconds.')
     }
+    throw new Error(message)
   }
 }
 
@@ -1222,7 +1225,7 @@ function generatePlaceholderImage(images: string[], prompt: string): string {
 }
 
 /** Vercel: allow up to 60s for AI image generation (Pro plan). Hobby plan caps at 10s. */
-export const maxDuration = 60
+export const maxDuration = 300
 
 /**
  * POST handler for image generation
@@ -1299,21 +1302,17 @@ export async function POST(request: NextRequest) {
         : null
     const hasLayoutAnchor = typeof lockedLayoutImage === 'string' && lockedLayoutImage.length > 0
 
-    // Keep the selected layout image as the FIRST (anchor) input throughout the flow.
-    // For customization/style-only reconfigure, include current result as SECOND input.
+    // Keep the selected layout image as the ONLY structural source throughout the flow.
+    // This prevents layout/camera drift when users regenerate after editing.
     let imagesForGeneration: string[] = Array.isArray(images) ? images : []
-    if ((isCustomizationMode || isStyleOnlyReconfigure) && typeof currentResultImage === 'string') {
-      imagesForGeneration = hasLayoutAnchor
-        ? [lockedLayoutImage!, currentResultImage]
-        : [currentResultImage]
-    } else if (hasLayoutAnchor) {
+    if (hasLayoutAnchor) {
       imagesForGeneration = [lockedLayoutImage!]
+    } else if ((isCustomizationMode || isStyleOnlyReconfigure) && typeof currentResultImage === 'string') {
+      imagesForGeneration = [currentResultImage]
     }
 
-    // Pure locked-layout full generation: only the fixed layout image is used.
+    // Locked-layout generation across all modes: only the fixed layout image is used.
     const useLockedLayoutOnly =
-      !isCustomizationMode &&
-      !isStyleOnlyReconfigure &&
       hasLayoutAnchor &&
       imagesForGeneration.length === 1
 
@@ -1692,11 +1691,14 @@ The SINGLE image provided below is the CURRENT RESULT. Your output MUST be this 
     })
   } catch (error) {
     console.error('Error generating image:', error)
+    const msg = error instanceof Error ? error.message : 'Internal server error'
+    const status =
+      /temporarily unavailable|high demand|retry/i.test(msg) ? 503 : 500
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : 'Internal server error',
+        error: msg,
       },
-      { status: 500 }
+      { status }
     )
   }
 }

@@ -1,4 +1,4 @@
-import type { AppState, DetectedComponent, HistoryEntry, HoverDetectedComponent, Region } from '../types'
+import type { AppState, DetectedComponent, HistoryEntry, Region } from '../types'
 import { getNextAccentColor, resetAccentIndex } from '../lib/canvasUtils'
 import { COMPONENT_NAMES } from '../lib/mockData'
 
@@ -64,6 +64,9 @@ export type Action =
   | { type: 'ADD_EXTRACTED_COMPONENT'; payload: { cutoutDataUrl: string; region: Region; name?: string; maskDataUrl?: string } }
   | { type: 'ADD_EXTRACTED_COMPONENTS'; payload: Array<{ cutoutDataUrl: string; region: Region; name?: string; maskDataUrl?: string }> }
   | { type: 'SET_DISPLAY_IMAGE'; payload: string | null }
+  | { type: 'SET_HOVER_DETECTED'; payload: AppState['hoverDetected'] }
+  | { type: 'CLEAR_HOVER_DETECTED' }
+  | { type: 'REMOVE_HOVER_DETECTED'; payload: string }
   | { type: 'UNDO' }
   | { type: 'REDO' }
   | { type: 'RECORD_HISTORY' }

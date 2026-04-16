@@ -40,10 +40,6 @@ export function regionGrowingFromSeed(
   const maxPixels = Math.floor(width * height * maxAreaRatio)
   const mask = new Uint8Array(width * height)
   const visited = new Uint8Array(width * height)
-  const seedI = (seedY * width + seedX) * 4
-  const sr = data[seedI]
-  const sg = data[seedI + 1]
-  const sb = data[seedI + 2]
   const queue: number[] = [seedY * width + seedX]
   visited[seedY * width + seedX] = 1
   let count = 0
@@ -168,7 +164,6 @@ export function morphologicalClose(
 ): Uint8Array {
   const out = new Uint8Array(mask.length)
   const r = Math.max(1, Math.min(radius, 4))
-  const size = 2 * r + 1
   const dilate = (src: Uint8Array, dst: Uint8Array) => {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {

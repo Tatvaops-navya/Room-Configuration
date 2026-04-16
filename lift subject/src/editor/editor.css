@@ -264,31 +264,38 @@
   }
 
   .editor-right-panel {
-    width: min(420px, 94vw);
-  }
-
-  .editor-right-panel {
     top: auto;
     right: 0;
     left: 0;
     bottom: 0;
     width: 100%;
-    height: min(78dvh, 760px);
+    height: min(74dvh, 720px);
+    max-height: 84dvh;
     border-left: none;
     border-top: 1px solid #e5e7eb;
-    border-top-left-radius: 14px;
-    border-top-right-radius: 14px;
-    box-shadow: 0 -12px 30px rgba(15, 23, 42, 0.24);
+    border-radius: 16px 16px 0 0;
     transform: translateY(105%);
+    box-shadow: 0 -12px 28px rgba(15, 23, 42, 0.22);
   }
 
   .editor-right-panel.is-open {
     transform: translateY(0);
   }
 
+  .editor-right-panel::before {
+    content: '';
+    display: block;
+    width: 44px;
+    height: 5px;
+    border-radius: 999px;
+    background: #cbd5e1;
+    margin: 10px auto 6px;
+    flex-shrink: 0;
+  }
+
   .editor-layout__canvas {
     min-height: 0;
-    padding: 8px 8px 78px;
+    padding: 8px 8px 84px;
     width: 100%;
   }
 

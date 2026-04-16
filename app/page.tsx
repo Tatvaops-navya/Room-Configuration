@@ -815,9 +815,6 @@ function ExternalCustomizationPanel({
  * Flow: Step 1 = Select Configuration Type (Internal/External) → Upload → AI Detection → Config Mode → Generate
  */
 export default function Home() {
-  const lastGenerationRequestRef = useRef<{ key: string; at: number } | null>(null)
-  const DUPLICATE_GENERATION_WINDOW_MS = 12000
-
   // Step 1: Configuration type (must select before upload)
   const [configType, setConfigType] = useState<ConfigType>(null)
 
@@ -1821,34 +1818,6 @@ export default function Home() {
       }
     }
 
-    // Guard against accidental automatic duplicate generations with unchanged inputs.
-    const requestKey = JSON.stringify({
-      configType,
-      configMode,
-      imageCount: images.length,
-      layoutReferenceImageIndex,
-      selectedStyle: selectedStyle ?? '',
-      selectedColorPalette: selectedColorPalette ?? '',
-      fullRoomText: fullRoomText.trim(),
-      fullRoomReferenceCount: fullRoomReferenceImages.length,
-      arrangementConfig,
-      componentReferenceCount: componentReferenceImages.length,
-      componentReferenceLabels: componentReferenceLabels.map((l) => l.trim()),
-      customStyles,
-      customActions,
-      externalCustomization,
-      eraseRegionSelection,
-      eraseRegionConfirmed,
-      hasCurrentResultImage: Boolean(generatedImageOriginal ?? generatedImage),
-    })
-    const nowTs = Date.now()
-    const lastReq = lastGenerationRequestRef.current
-    if (lastReq && lastReq.key === requestKey && nowTs - lastReq.at < DUPLICATE_GENERATION_WINDOW_MS) {
-      console.log('[Generate] Duplicate request ignored (same inputs within cooldown window).')
-      return
-    }
-    lastGenerationRequestRef.current = { key: requestKey, at: nowTs }
-
     setIsGenerating(true)
     setError(null)
     setWarning(null)
@@ -1996,8 +1965,6 @@ export default function Home() {
         setIsEditingStylePalette(false)
       }
     } catch (err) {
-      // Failed requests can be retried immediately by user.
-      lastGenerationRequestRef.current = null
       const msg =
         err instanceof Error && err.name === 'AbortError'
           ? 'Generation timed out or was interrupted. Check your connection and try again.'
@@ -2254,18 +2221,6 @@ Important:
     Boolean(generatedImage) &&
     !isGenerating &&
     !styleFinalizeGatePassed
-
-  /** Only enable Regenerate when something has actually changed since the last applied style/palette or customization. */
-  const stylePaletteKeyCurrent = stylePaletteKey(selectedStyle, selectedColorPalette)
-  const hasPendingStyleOrPaletteChange =
-    (configType === 'internal' || configType === 'external') &&
-    hasRoomGenerationResult &&
-    stylePaletteKeyCurrent !== lastAppliedStylePaletteKey
-  const canRegenerateWithChanges =
-    (configType === 'vastu'
-      ? true
-      : hasCustomizationSelection || hasExternalCustomizationSelection || hasPendingStyleOrPaletteChange) &&
-    canGenerate
 
   const customizationFocusCompact =
     (configType === 'internal' || configType === 'external') &&
@@ -3342,7 +3297,7 @@ Important:
                                 regenerateDisabled={
                                   configType === 'vastu'
                                     ? isGenerating || images.length < 4 || layoutReferenceImageIndex == null
-                                    : !canRegenerateWithChanges || isGenerating
+                                    : !canGenerate || isGenerating
                                 }
                                 regeneratePending={isGenerating}
                                 styleLabel={styleLabel}

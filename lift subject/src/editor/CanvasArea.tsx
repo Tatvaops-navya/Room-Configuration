@@ -5,7 +5,6 @@ import {
   extractComponentAtPointClick,
   cropToDataUrl,
   compositeComponentsOntoImage,
-  detectRoomComponents,
   detectHoverComponents,
 } from '../lib/canvasUtils'
 import { addToast } from '../components/ToastContainer'
@@ -56,12 +55,6 @@ export function CanvasArea() {
     const height = Math.abs(dragStart.y - dragCurrent.y)
     return { x, y, width, height }
   }, [dragStart, dragCurrent])
-
-  const clearSelectionArtifacts = useCallback(() => {
-    setDragStart(null)
-    setDragCurrent(null)
-    dispatch({ type: 'DESELECT_ALL' })
-  }, [dispatch])
 
   useEffect(() => {
     setDragStart(null)
@@ -315,7 +308,7 @@ export function CanvasArea() {
           payload: {
             cutoutDataUrl: result.dataUrl,
             region: result.region,
-            maskDataUrl: result.maskDataUrl,
+            maskDataUrl: result.maskDataUrl ?? undefined,
             name: label ? `Detected: ${label}` : undefined,
           },
         })
