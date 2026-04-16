@@ -79,6 +79,69 @@ function buildFullRoomAdditionalText(session: RoomWizardSession): string | undef
   return undefined
 }
 
+function dedupeStringArray(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const trimmed = typeof value === 'string' ? value.trim() : ''
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+  }
+  return result
+}
+
+async function optimizeImageDataUrlForApi(
+  dataUrl: string,
+  options?: { maxDimension?: number; quality?: number }
+): Promise<string> {
+  const trimmed = dataUrl.trim()
+  if (!trimmed.startsWith('data:image/')) return trimmed
+
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const maxDimension = Math.max(512, options?.maxDimension ?? 1280)
+        const quality = Math.min(0.92, Math.max(0.55, options?.quality ?? 0.8))
+        const largestSide = Math.max(img.naturalWidth, img.naturalHeight)
+        const scale = largestSide > maxDimension ? maxDimension / largestSide : 1
+        const targetWidth = Math.max(1, Math.round(img.naturalWidth * scale))
+        const targetHeight = Math.max(1, Math.round(img.naturalHeight * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = targetWidth
+        canvas.height = targetHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return resolve(trimmed)
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight)
+
+        const optimized = canvas.toDataURL('image/jpeg', quality)
+        resolve(optimized.length < trimmed.length ? optimized : trimmed)
+      } catch {
+        resolve(trimmed)
+      }
+    }
+    img.onerror = () => resolve(trimmed)
+    img.src = trimmed
+  })
+}
+
+async function optimizeImageListForApi(
+  images: Array<string | null | undefined>,
+  options?: { limit?: number; maxDimension?: number; quality?: number }
+): Promise<string[]> {
+  const unique = dedupeStringArray(images)
+  const limited = unique.slice(0, Math.max(0, options?.limit ?? unique.length))
+  return Promise.all(
+    limited.map((image) =>
+      optimizeImageDataUrlForApi(image, {
+        maxDimension: options?.maxDimension,
+        quality: options?.quality,
+      })
+    )
+  )
+}
+
 export type GenerateResponse = { imageUrl?: string; error?: string; warning?: string }
 
 /** Matches `/api/generate` customization label entries (see `app/page.tsx` resolvedCustomizationLabels). */
@@ -727,9 +790,18 @@ export async function postRoomGenerate(
   }
 
   // Match Next UI payload shape as closely as possible:
-  // send all uploaded images and the selected layout anchor index.
-  const imagesPayload = imagesDataUrl
-  const layoutIndexPayload = idx
+  // Send only the selected structural image. The backend now locks generation to
+  // the layout anchor, so uploading all room shots only increases payload size and
+  // causes Vercel 413 errors on production requests.
+  const selectedLayoutImage = imagesDataUrl[idx]
+  const baseRoomImage = useCurrent ? cur ?? selectedLayoutImage : selectedLayoutImage
+  const [optimizedBaseRoomImage] = await optimizeImageListForApi([baseRoomImage], {
+    limit: 1,
+    maxDimension: 1400,
+    quality: 0.82,
+  })
+  const imagesPayload = optimizedBaseRoomImage ? [optimizedBaseRoomImage] : [baseRoomImage]
+  const layoutIndexPayload = 0
   const fullRoomAdditionalText = buildFullRoomAdditionalText(session)
   const normalizedPurposeInput = session.roomContext?.trim()
   const fallbackPurposeInput =
@@ -764,6 +836,29 @@ export async function postRoomGenerate(
     session.omitWizardStyleAndPalette === true && effectiveMode === 'arrangement'
   const styleTrimmed = typeof selectedStyle === 'string' ? selectedStyle.trim() : ''
   const paletteForBody = omitStylePalette ? undefined : paletteId ?? undefined
+  const optimizedCurrentResultImage =
+    useCurrent && cur
+      ? await optimizeImageDataUrlForApi(cur, {
+          maxDimension: 1400,
+          quality: 0.82,
+        })
+      : undefined
+  const optimizedComponentReferenceImages = await optimizeImageListForApi(
+    componentReferenceImages ?? [],
+    {
+      limit: 4,
+      maxDimension: 1200,
+      quality: 0.76,
+    }
+  )
+  const optimizedOptionalReferenceImages = await optimizeImageListForApi(
+    session.optionalReferenceImages ?? [],
+    {
+      limit: 2,
+      maxDimension: 1200,
+      quality: 0.74,
+    }
+  )
 
   let res: Response
   try {
@@ -781,19 +876,21 @@ export async function postRoomGenerate(
         ...(paletteForBody ? { selectedColorPalette: paletteForBody } : {}),
         vastuEnabled: false,
         ...(componentReferenceImages && componentReferenceImages.length > 0
-          ? { componentReferenceImages }
+          ? { componentReferenceImages: optimizedComponentReferenceImages }
           : {}),
         ...(componentReferenceLabels && componentReferenceLabels.length > 0
           ? { componentReferenceLabels }
           : {}),
-        ...(useCurrent ? { currentResultImage: cur } : {}),
+        ...(useCurrent && optimizedCurrentResultImage
+          ? { currentResultImage: optimizedCurrentResultImage }
+          : {}),
         ...(options?.shuffle ? { shuffle: true } : {}),
         ...(fullRoomAdditionalText ? { fullRoomAdditionalText } : {}),
-        ...(Array.isArray(session.optionalReferenceImages) && session.optionalReferenceImages.length > 0
-          ? { fullRoomReferenceImages: session.optionalReferenceImages }
+        ...(effectiveMode === 'purpose' && optimizedOptionalReferenceImages.length > 0
+          ? { fullRoomReferenceImages: optimizedOptionalReferenceImages }
           : {}),
-        ...(Array.isArray(session.optionalReferenceImages) && session.optionalReferenceImages.length > 0
-          ? { optionalReferenceImages: session.optionalReferenceImages }
+        ...(effectiveMode === 'arrangement' && optimizedOptionalReferenceImages.length > 0
+          ? { optionalReferenceImages: optimizedOptionalReferenceImages }
           : {}),
       }),
     })
