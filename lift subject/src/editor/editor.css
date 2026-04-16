@@ -1,0 +1,324 @@
+/* Minimal layout for tab content (referenced by PresetTab, AITab, etc.) */
+.editor-tab-content {
+  padding: 16px;
+  min-height: 120px;
+}
+
+.editor-root {
+  --text-tertiary: #9ca3af;
+  --text-secondary: #6b7280;
+  --preset: #0ea5e9;
+}
+
+.editor-header {
+  min-height: 60px;
+  background: #1f2937;
+  color: #ffffff;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #374151;
+}
+
+.editor-header__title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 20px;
+  font-weight: 700;
+  min-width: 0;
+}
+
+.editor-header__status {
+  flex: 1;
+  text-align: center;
+  margin: 0 16px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-header__actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.editor-header__export-btn {
+  padding: 8px 16px;
+  background: #0ea5e9;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.editor-layout-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(320px, 380px);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-left-sidebar {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid #e5e7eb;
+  background: #ffffff;
+  overflow-y: auto;
+  padding: 16px 14px;
+}
+
+.editor-layout__canvas {
+  min-width: 0;
+  min-height: 0;
+  background-color: #f3f4f6;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: auto;
+}
+
+.editor-right-panel {
+  min-width: 0;
+  min-height: 0;
+  background-color: #ffffff;
+  border-left: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.editor-layout__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  z-index: 70;
+}
+
+.editor-layout__overlay.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.editor-mobile-topbar {
+  display: none;
+}
+
+.editor-mobile-bottom-toolbar {
+  display: none;
+}
+
+/* Global animations */
+@keyframes dashBorder {
+  to {
+    stroke-dashoffset: -20px;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes selection-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 30px rgba(37, 99, 235, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 50px rgba(37, 99, 235, 0.7);
+  }
+}
+
+/* Optional: Custom scrollbar - visible so users see they can scroll */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+@media (max-width: 1024px) {
+  .editor-layout {
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  }
+
+  .editor-right-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: min(420px, 92vw);
+    height: 100dvh;
+    z-index: 80;
+    transform: translateX(105%);
+    transition: transform 0.25s ease;
+    border-left: 1px solid #e5e7eb;
+    box-shadow: -12px 0 28px rgba(15, 23, 42, 0.2);
+  }
+
+  .editor-right-panel.is-open {
+    transform: translateX(0);
+  }
+
+  .editor-mobile-topbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    padding: 0.6rem 0.85rem 0.4rem;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fff;
+    z-index: 30;
+  }
+
+  .editor-mobile-topbar__btn {
+    min-height: 42px;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #fff;
+    color: #1e293b;
+    font-size: 0.86rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+}
+
+@media (max-width: 768px) {
+  .editor-header {
+    padding: 0 12px;
+    min-height: 56px;
+  }
+
+  .editor-header__title {
+    font-size: 16px;
+    gap: 8px;
+  }
+
+  .editor-header__status {
+    display: none;
+  }
+
+  .editor-header__actions {
+    gap: 8px;
+  }
+
+  .editor-header__export-btn {
+    padding: 7px 12px;
+    font-size: 13px;
+  }
+
+  .editor-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .editor-left-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: min(320px, 86vw);
+    height: 100dvh;
+    z-index: 85;
+    transform: translateX(-105%);
+    transition: transform 0.25s ease;
+    box-shadow: 12px 0 28px rgba(15, 23, 42, 0.2);
+  }
+
+  .editor-left-sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .editor-right-panel {
+    width: min(420px, 94vw);
+  }
+
+  .editor-right-panel {
+    top: auto;
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: min(78dvh, 760px);
+    border-left: none;
+    border-top: 1px solid #e5e7eb;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    box-shadow: 0 -12px 30px rgba(15, 23, 42, 0.24);
+    transform: translateY(105%);
+  }
+
+  .editor-right-panel.is-open {
+    transform: translateY(0);
+  }
+
+  .editor-layout__canvas {
+    min-height: 0;
+    padding: 8px 8px 78px;
+    width: 100%;
+  }
+
+  .editor-mobile-topbar {
+    display: flex;
+  }
+
+  .editor-mobile-bottom-toolbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 90;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+    padding: 0.7rem 0.8rem calc(0.7rem + env(safe-area-inset-bottom));
+    border-top: 1px solid #e5e7eb;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(8px);
+  }
+
+  .editor-mobile-bottom-toolbar__btn {
+    min-height: 46px;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: #fff;
+    color: #0f172a;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+}

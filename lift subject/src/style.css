@@ -1,0 +1,216 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #2563EB;
+  --primary-hover: #1d4ed8;
+  --primary-light: #DBEAFE;
+  --preset: #0EA5E9;
+  --preset-hover: #0284c7;
+  --ai: #8B5CF6;
+  --ai-hover: #7C3AED;
+  --replace: #EC4899;
+  --replace-hover: #DB2777;
+  --secondary: #8B5CF6;
+  --secondary-light: #EDE9FE;
+  --accent: #EC4899;
+  --accent-light: #FCE7F3;
+  --success: #10B981;
+  --success-light: #D1FAE5;
+  --warning: #F59E0B;
+  --surface: #F9FAFB;
+  --neutral-50: #F9FAFB;
+  --neutral-100: #F3F4F6;
+  --neutral-200: #E5E7EB;
+  --neutral-300: #D1D5DB;
+  --neutral-400: #9CA3AF;
+  --neutral-500: #6B7280;
+  --neutral-600: #4B5563;
+  --neutral-700: #374151;
+  --neutral-800: #1F2937;
+  --neutral-900: #111827;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-modal: 0 24px 48px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.08);
+  --shadow-glow: 0 0 40px rgba(37, 99, 235, 0.25);
+  --shadow-editor-modal: 0 -4px 24px rgba(0, 0, 0, 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--surface);
+  color: var(--neutral-800);
+  line-height: 1.6;
+  font-size: 14px;
+}
+@media (max-width: 767px) {
+  body { font-size: 16px; }
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+#root > main {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Checkered background for transparent cutouts (8px squares per spec) */
+.checkered {
+  background-color: #f9fafb;
+  background-image:
+    linear-gradient(45deg, #e5e7eb 25%, transparent 25%),
+    linear-gradient(-45deg, #e5e7eb 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e5e7eb 75%),
+    linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}
+
+/* Action buttons: Preset (sky), AI (purple), Replace (pink) */
+.action-btn-preset {
+  background: linear-gradient(180deg, var(--preset) 0%, var(--preset-hover) 100%);
+  box-shadow: 0 4px 16px rgba(14, 165, 233, 0.35);
+}
+.action-btn-preset:hover { box-shadow: 0 8px 20px rgba(14, 165, 233, 0.4); filter: brightness(1.08); }
+
+.action-btn-ai {
+  background: linear-gradient(180deg, var(--ai) 0%, var(--ai-hover) 100%);
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.35);
+}
+.action-btn-ai:hover { box-shadow: 0 8px 20px rgba(139, 92, 246, 0.4); filter: brightness(1.08); }
+
+.action-btn-replace {
+  background: linear-gradient(180deg, var(--replace) 0%, var(--replace-hover) 100%);
+  box-shadow: 0 4px 16px rgba(236, 72, 153, 0.35);
+}
+.action-btn-replace:hover { box-shadow: 0 8px 20px rgba(236, 72, 153, 0.4); filter: brightness(1.08); }
+
+/* Layout: canvas section and sidebar */
+.layout-editor .canvas-section { flex: 1 1 60%; }
+.layout-editor .sidebar-panel { display: flex; flex-direction: column; }
+
+
+/* Animations */
+@keyframes fade-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-fade-scale-in {
+  animation: fade-scale-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes cutout-enter {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  50% { opacity: 0.85; transform: scale(0.98) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.cutout-card {
+  animation: cutout-enter 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Buttons */
+.btn-primary {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  background: linear-gradient(180deg, var(--primary) 0%, var(--primary-hover) 100%);
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover {
+  filter: brightness(1.05);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+}
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+/* Focus ring for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Custom range slider */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--neutral-200);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+/* Checkbox styling */
+input[type="checkbox"] {
+  accent-color: var(--primary);
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+/* Cutout preview: rectangular, full component visible, transparent background support */
+.cutout-preview-rect {
+  border-radius: var(--radius-sm) !important;
+  overflow: visible !important;
+  background-color: #f8fafc;
+}
+.cutout-preview-rect img {
+  border-radius: 0 !important;
+  max-width: 100%;
+  object-fit: contain;
+  display: block;
+}

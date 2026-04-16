@@ -18,10 +18,12 @@ interface CustomizationLabelEntry {
   description: string
   /** true if this is a decor/additive override (add elements); false = restyle appearance of existing element */
   isDecor: boolean
+  /** Optional UI action that generated this customization selection */
+  action?: 'edit' | 'add' | 'replace' | 'erase'
 }
 
 interface PromptBuilderOptions {
-  configMode: 'purpose' | 'arrangement'
+  configMode: 'purpose' | 'arrangement' | 'customization'
   purposeInput?: string
   fullRoomAdditionalText?: string
   arrangementConfig?: ArrangementConfig
@@ -100,6 +102,7 @@ CRITICAL - PRESERVE THE ORIGINAL ROOM (DO NOT CHANGE LAYOUT, SIZE, OR CAMERA VIE
 - Do NOT generate a different room. The output must MATCH the user's uploaded images in room structure - same size, same layout - with only furniture and decor reconfigured inside that room.
 - Any "reference" or "style" images are ONLY for furniture and decor - they do NOT define the room structure. The room structure comes ONLY from the user's uploaded room images.
 - Treat the user's room as a FIXED container: walls, windows, doors, ceiling, floor, room size, and camera angle are UNCHANGEABLE. Only the contents (furniture, components, decor) inside that container may be reconfigured.
+- STRUCTURAL SILHOUETTE: Do NOT add or remove stair flights, landings, mezzanines, partition walls, full-height builtins, or new door/window openings. Do NOT relocate stairs or glazing. Regional or traditional style applies to finishes and movable furniture only—never invent architecture that is not clearly present in the upload.
 
 FULL ROOM - SAME FRAMING (CRITICAL):
 - Your output MUST show the FULL room from the same viewpoint as the layout image - the entire frame, same field of view, same edges. Do NOT crop, zoom in, or focus on one corner, one wall, or one piece of furniture (e.g. do not show only a counter or one desk). The complete room as captured in the layout image must be visible in your output so the full image is preserved.
@@ -176,7 +179,20 @@ ABSOLUTE RULE (EXTERNAL): Do NOT add or remove any structural elements compared 
       : userText
       ? `MAIN IDEA: Keep the SIZE, LENGTH, HEIGHT, WIDTH and LAYOUT the SAME as the user's room. Only reconfigure the INTERIOR (furniture, decor). The generated image must MATCH the user's room in structure.
 
+LAYOUT LOCK – DO NOT CHANGE THE ROOM (CRITICAL):
+- The user's room LAYOUT is FIXED: same walls, same floor plan, same ceiling, same doors/windows, same corridors, same built-in positions, same camera angle and viewpoint. The output must look like the SAME photograph of the SAME space.
+- "Convert to bedroom", "convert to kitchen", "reception", etc. means: place that type of furniture and decor INSIDE this exact same room. Do NOT generate a different room layout or a different space. If the original has a reception desk area and a corridor, the output must have that same desk area and corridor; only furniture and decor change.
+- The result must be recognizably the SAME room as in the user's uploaded images – same structure, same layout – with only the interior (furniture, decor) reconfigured to match the user's intent and style.
+- Do NOT add structural elements not present in the upload: no new staircases, stair repositioning, new doorways, bricked-over windows, new partition walls, or full-height cabinet walls that change the shell. Stairs, openings, and ceiling lines must match the source image.
+
 Reconfigure the INTERIOR of the user's room based on: "${userText}".
+
+FULL ROOM CONFIGURATION – USER INTENT MUST FILL THE SPACE (CRITICAL):
+- The user's description/preferences apply to the ENTIRE room. Do NOT leave large empty areas or unused space.
+- Interpret the user's intent fully: e.g. "convert into kitchen" means the whole room should be a complete kitchen (cabinets, countertops, island or work area, sink, stove/oven, refrigerator, seating, lighting, backsplash) – not a corner with a few kitchen elements and the rest empty.
+- "Fill the space" means furnish and finish within the EXISTING walls, ceiling, and openings only. Base cabinets, islands, and tall units must sit inside the current floor plan without inventing new walls, stair blocks, or relocated windows.
+- Use the full floor area, walls, and ceiling meaningfully. The result must look like a finished, complete room that fully reflects the user's request – no incomplete or "somewhat done" layouts.
+- Do NOT output a partially configured room. Every visible zone of the room should contribute to the requested configuration (e.g. full kitchen, full bedroom, full living room) with appropriate furniture and elements throughout.
     
 REFERENCE = style, elements, furniture, colors, components ONLY. Layout, size, length, width, height must NOT change; they come ONLY from the user's uploaded room images.
 
@@ -189,7 +205,9 @@ FULL CONFIGURATION - REMOVE OLD ITEMS AND REPLACE WITH REFERENCE STYLE:
 - Do NOT generate the same image as the reference. The output must BE the user's room (first images) with reference-style interior, NOT a copy of the reference room.`
       : `MAIN IDEA: Keep the SIZE, LENGTH, HEIGHT, WIDTH and LAYOUT the SAME as the user's room. Only reconfigure the INTERIOR (furniture, decor). The generated image must MATCH the user's room in structure. Do NOT generate the same as the reference image.
 
-Reconfigure the INTERIOR of the user's room using the reference image(s) for STYLE only.
+LAYOUT LOCK: The output must be the SAME room as the user's images – same walls, floor plan, ceiling, doors, corridors, camera angle. Only furniture and decor change; do NOT generate a different room layout.
+
+Reconfigure the INTERIOR of the user's room using the reference image(s) for STYLE only. Use the full space – do not leave large empty areas; the room should look complete and finished.
     
 REFERENCE = style, elements, furniture, colors, components ONLY. Layout, size, length, width, height must NOT change; they come ONLY from the user's uploaded room images.
 
@@ -198,6 +216,15 @@ FULL CONFIGURATION - REMOVE OLD ITEMS AND REPLACE WITH REFERENCE STYLE:
 - The room structure (layout, size, length, width, height, walls, floor, ceiling, dimensions) comes ONLY from the user's room images and must NOT change.
 - Do NOT output the same image as the reference. The output must BE the user's room with reference-inspired interior, NOT a copy of the reference room.`
     prompt += `${shuffle ? '\n\nCreate a slightly different furniture arrangement while keeping the same configuration and IDENTICAL room structure and dimensions.' : ''}`
+
+    const userAdditional = capUserText(fullRoomAdditionalText)
+    if (userAdditional) {
+      if (isExternal) {
+        prompt += `\n\nUSER ADDITIONAL INSTRUCTIONS (mandatory — combine with the selected design style and color palette; keep the same building mass, floors, and opening positions):\n${userAdditional}\n- Apply the user's vision to finishes, colors, materials, landscaping, and mood on the existing property. Regional or cultural cues must be clearly visible and work together with the chosen style and palette.`
+      } else {
+        prompt += `\n\nUSER ADDITIONAL INSTRUCTIONS (mandatory — combine with the selected design style and color palette; same room layout, walls, ceiling, doors, windows, and camera):\n${userAdditional}\n- Honor regional, cultural, or thematic direction (e.g. Indian Rajasthani, Mediterranean, coastal, Japandi) in furniture, textiles, patterns, materials, and decor while staying coherent with the named style and palette.\n- The user's text defines how the style and colors should feel in this exact space; do not change room geometry or structure to satisfy these notes.`
+      }
+    }
   } else if (configMode === 'arrangement' && arrangementConfig) {
     // Component-based configuration
     const {
@@ -215,6 +242,7 @@ PRESERVE THE USER'S ROOM - DO NOT CHANGE LAYOUT OR SIZE:
 - The room in your output must be the SAME physical space as shown in the user's uploaded room images - same dimensions (length, width, height), same walls, same windows, same ceiling, same floor.
 - Only change: furniture, components, decor. Do NOT change: room size, wall positions, window positions/sizes, door positions, ceiling height/structure, floor area/shape.
 - The room structure is a FIXED container - only the contents (furniture/components) inside it can be rearranged.
+- Do NOT add or remove permanent architecture: same stair flights and geometry as the upload (no new staircases, no different tread layout), no new doorways or filled-in openings, no new partition walls or builtins that alter the shell.
 
 1. Components to REMOVE (exclude from the final room - do not include these):
 ${removedComponentsNote ? removedComponentsNote.split(',').map((c) => `- ${c.trim()}`).filter(Boolean).join('\n') || '- (none)' : '- (none)'}
@@ -238,6 +266,18 @@ ABSOLUTE REQUIREMENTS:
 - The generated room must have IDENTICAL physical structure and dimensions to the user's uploaded room - it must look like the exact same room with only furniture/components changed
 - Do NOT add extra layouts, walls, partitions, or any structural modifications
 ${shuffle ? 'For this variation, keep the same components and IDENTICAL room structure/dimensions, but explore a slightly different, still practical arrangement of interior elements only.' : ''}`
+  } else if (configMode === 'customization') {
+    prompt = `MAIN IDEA: Keep the uploaded room EXACTLY the same in layout, structure, dimensions, and camera framing. Apply ONLY targeted visual customization to selected components.
+
+CUSTOMIZATION MODE (UPLOADED IMAGE ONLY):
+- Use the user-selected uploaded layout image as the fixed source.
+- Preserve room geometry: same walls, floor plan, ceiling, windows, doors, and proportions.
+- Preserve camera framing: no crop, no zoom, no angle change.
+- Only restyle selected components (materials, textures, finishes, colors) according to customization selections.
+- Do NOT perform full-room redesign, furniture relocation, or structural changes.
+
+OUTPUT REQUIREMENT:
+- The output must look like the SAME photograph with only selected component-level visual updates.`
   }
 
   return prompt
@@ -250,7 +290,16 @@ ${shuffle ? 'For this variation, keep the same components and IDENTICAL room str
  * @returns Complete prompt string ready to be sent to AI
  */
 export function buildPrompt(options: PromptBuilderOptions): string {
-  const { vastuEnabled, configType = 'internal', customizationStyles, customizationLabels, externalCustomization, selectedStyle, selectedColorPalette } = options
+  const {
+    vastuEnabled,
+    configType = 'internal',
+    customizationStyles,
+    customizationLabels,
+    externalCustomization,
+    selectedStyle,
+    selectedColorPalette,
+    configMode,
+  } = options
 
   // Build the user prompt based on configuration
   let userPrompt = buildUserPrompt(options)
@@ -260,7 +309,8 @@ export function buildPrompt(options: PromptBuilderOptions): string {
   const paletteId = selectedColorPalette?.trim()
   const paletteText = getPaletteInstruction(selectedColorPalette)
 
-  if (styleLabel || paletteText) {
+  // Per-element customization: do NOT prepend whole-room style/palette — it makes the model change furniture and decor globally instead of only the selected surface/object.
+  if (configMode !== 'customization' && (styleLabel || paletteText)) {
     const styleCapitalized = styleLabel ? styleLabel.charAt(0).toUpperCase() + styleLabel.slice(1) : ''
     const parts: string[] = []
     if (styleLabel) {
@@ -279,13 +329,19 @@ export function buildPrompt(options: PromptBuilderOptions): string {
   if (configType !== 'external' && customizationStyles) {
     const restyleLines: string[] = []
     const decorLines: string[] = []
+    const replaceLines: string[] = []
+    const eraseLines: string[] = []
 
     Object.entries(customizationStyles)
       .filter(([, value]) => value)
       .forEach(([key]) => {
         const entry = customizationLabels?.[key]
         if (entry) {
-          if (entry.isDecor) {
+          if (entry.action === 'erase') {
+            eraseLines.push(`- ${key}: ${entry.description}`)
+          } else if (entry.action === 'replace') {
+            replaceLines.push(`- ${key} → "${entry.label}": ${entry.description}`)
+          } else if (entry.isDecor || entry.action === 'add') {
             decorLines.push(`- ${entry.label}: ${entry.description}`)
           } else {
             restyleLines.push(`- ${key} → "${entry.label}": ${entry.description}`)
@@ -306,6 +362,16 @@ ${restyleLines.join('\n')}`)
     if (decorLines.length > 0) {
       sections.push(`ADD THESE DECORATIVE ELEMENTS (place them naturally in empty corners or surfaces – do NOT remove or alter any existing furniture, walls, floor, ceiling, or other elements):
 ${decorLines.join('\n')}`)
+    }
+
+    if (replaceLines.length > 0) {
+      sections.push(`REPLACE THESE ELEMENTS (swap selected items with the requested style while preserving room layout and camera framing):
+${replaceLines.join('\n')}`)
+    }
+
+    if (eraseLines.length > 0) {
+      sections.push(`ERASE THESE ELEMENTS (remove only these selected elements; keep every other item and the full layout unchanged):
+${eraseLines.join('\n')}`)
     }
 
     if (sections.length > 0) {
@@ -347,7 +413,19 @@ Update the exterior by applying these material/style presets to the specified el
 
   // Combine system prompt and user prompt (internal vs external)
   const basePrompt = getBaseSystemPrompt(configType)
-  const fullPrompt = `${basePrompt}\n\n${userPrompt}`
+
+  /** Appended to every request: reinforces geometry/camera stability without removing mode-specific intent above. */
+  const structureLockAndNegatives = `--- STRUCTURE LOCK (ALL MODES) ---
+- Do not change room/building layout, wall positions, opening positions, camera angle, focal length, field of view, or proportions compared to the user's layout/source images unless this run is explicitly an arrangement/Vastu flow that only moves furniture inside the same shell.
+- Preserve the same single viewpoint and framing as the primary input image; no accidental re-crop, zoom, or perspective shift.
+
+--- NEGATIVE PROMPTS (AVOID) ---
+- No lens distortion, fisheye, or unexplained perspective warp vs. the source.
+- No floating objects, duplicated rooms, or mirrored/split layouts.
+- No geometry changes to architecture when the task is style, palette, or targeted customization only.
+- No text, logos, watermarks, or UI in the image (except what exists in the user's photo).`
+
+  const fullPrompt = `${basePrompt}\n\n--- CONTEXT & USER REQUEST ---\n${userPrompt}\n\n${structureLockAndNegatives}`
 
   return fullPrompt
 }
@@ -356,7 +434,17 @@ Update the exterior by applying these material/style presets to the specified el
  * Build a simplified prompt summary for logging/debugging
  */
 export function buildPromptSummary(options: PromptBuilderOptions): string {
-  const { configType = 'internal', configMode, purposeInput, arrangementConfig, vastuEnabled, shuffle, selectedStyle, selectedColorPalette } = options
+  const {
+    configType = 'internal',
+    configMode,
+    purposeInput,
+    fullRoomAdditionalText,
+    arrangementConfig,
+    vastuEnabled,
+    shuffle,
+    selectedStyle,
+    selectedColorPalette,
+  } = options
 
   let summary = `Type: ${configType} | Mode: ${configMode}`
   if (selectedStyle?.trim()) {
@@ -364,6 +452,10 @@ export function buildPromptSummary(options: PromptBuilderOptions): string {
   }
   if (selectedColorPalette?.trim()) {
     summary += ` | Palette: ${selectedColorPalette.trim()}`
+  }
+  const extraNotes = capUserText(fullRoomAdditionalText)
+  if (extraNotes) {
+    summary += ` | User notes: "${extraNotes.length > 60 ? extraNotes.slice(0, 60) + '…' : extraNotes}"`
   }
   if (configMode === 'purpose' && purposeInput) {
     summary += ` | Purpose: "${purposeInput}"`

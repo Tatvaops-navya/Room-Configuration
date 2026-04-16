@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, type Dispatch, type SetStateAction } from 'react'
 import ImageUpload from './components/ImageUpload'
 import ConfigurationSelector, { type DetectedComponent } from './components/ConfigurationSelector'
 import ComponentReferenceUpload from './components/ComponentReferenceUpload'
@@ -12,16 +12,33 @@ import VastuQuestionnaire, {
 } from './components/VastuQuestionnaire'
 import StyleSelector from './components/StyleSelector'
 import ColorPaletteSelector from './components/ColorPaletteSelector'
+import OptionalReconfigureHints from './components/OptionalReconfigureHints'
 import BeforeAfterSlider from './components/BeforeAfterSlider'
+import ResultPreviewToolbar from './components/ResultPreviewToolbar'
+import RoomImmersiveTourSection from './components/RoomImmersiveTourSection'
+import EraseRegionSelector, { type EraseRegion } from './components/EraseRegionSelector'
+import RegionEraseConfirmPanel from './components/RegionEraseConfirmPanel'
+import RoomEditorWorkbench from './components/room-editor/RoomEditorWorkbench'
+import SelectionModeToolbar from './components/room-editor/SelectionModeToolbar'
+import CanvasInteraction from './components/room-editor/CanvasInteraction'
+import PreviewPanel from './components/room-editor/PreviewPanel'
+import SidePanel from './components/room-editor/SidePanel'
+import HistoryManager from './lib/room-editor/HistoryManager'
+import CustomizationStyleGrid, { type StyleGridOption } from './components/CustomizationStyleGrid'
+import { useRoomEditorStore } from './lib/room-editor/roomEditorStore'
 import {
   type ExternalCategory,
   type ExternalCustomizationState,
   EXTERNAL_CATEGORIES,
   EXTERNAL_CATEGORY_LABELS,
   EXTERNAL_CUSTOMIZATION_PRESETS,
-  getInitialExternalCustomization,
 } from './utils/externalCustomizationPresets'
 import { downloadImageWithLogo, applyWatermarkToImage } from './utils/downloadWithLogo'
+import { useCustomization, type CustomAction } from '@/app/hooks/useCustomization'
+import { useWizardState } from '@/app/hooks/useWizardState'
+import { postJsonWithRetry } from '@/app/hooks/useGeneration'
+import { useRoomEditorImageSync } from '@/app/hooks/useRoomEditor'
+import type { ConfigType } from '@/app/types/config'
 
 /** Parse response as JSON; if body is plain text (e.g. "An error occurred"), avoid "is not valid JSON" throw. */
 async function parseJsonOrText<T = unknown>(res: Response): Promise<T> {
@@ -46,8 +63,7 @@ const EXTERNAL_CATEGORY_TO_COMPONENT: Record<ExternalCategory, string> = {
   architectural: 'facade',
 }
 
-/** Configuration type: internal (room), external (house/facade), or standalone Vastu-based. */
-export type ConfigType = 'internal' | 'external' | 'vastu' | null
+export type { ConfigType } from '@/app/types/config'
 
 type CustomElementType =
   | 'wall'
@@ -57,11 +73,105 @@ type CustomElementType =
   | 'chair'
   | 'desk'
   | 'table'
+  | 'dining'
   | 'cabinet'
   | 'door'
   | 'window'
   | 'glass-partition'
   | 'decor'
+
+const CUSTOM_ACTION_OPTIONS: { id: CustomAction; label: string }[] = [
+  { id: 'edit', label: 'Edit' },
+  { id: 'add', label: 'Add Object' },
+  { id: 'replace', label: 'Replace' },
+  { id: 'erase', label: 'Erase' },
+]
+
+function customActionDisplayLabel(action: CustomAction): string {
+  if (action === 'edit') return 'Customize'
+  return action.charAt(0).toUpperCase() + action.slice(1)
+}
+
+function stylePaletteKey(style: string | null, palette: string | null): string {
+  return `${style ?? ''}::${palette ?? ''}`
+}
+
+/** Customize / Add / Replace / Erase — reused under layout preview (Step 4A) and under each generated result. */
+function CustomizationModeActionButtons({
+  selectedCustomAction,
+  onSelect,
+  variant,
+  onGenerate360,
+  generate360Disabled = false,
+}: {
+  selectedCustomAction: CustomAction
+  onSelect: (action: CustomAction) => void
+  variant: 'overlay' | 'bar'
+  onGenerate360?: () => void
+  generate360Disabled?: boolean
+}) {
+  const isOverlay = variant === 'overlay'
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: isOverlay ? 'nowrap' : 'wrap',
+        gap: isOverlay ? '0.35rem' : '0.5rem',
+        justifyContent: 'center',
+        overflowX: isOverlay ? 'auto' : 'visible',
+        maxWidth: '100%',
+        scrollbarWidth: isOverlay ? 'thin' : undefined,
+      }}
+    >
+      {CUSTOM_ACTION_OPTIONS.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          className="button button-secondary"
+          style={{
+            padding: isOverlay ? '0.28rem 0.72rem' : '0.4rem 1rem',
+            fontSize: isOverlay ? '0.78rem' : '0.85rem',
+            borderRadius: isOverlay ? '999px' : '8px',
+            background:
+              selectedCustomAction === action.id
+                ? 'rgba(16, 185, 129, 0.24)'
+                : isOverlay
+                  ? 'rgba(255,255,255,0.92)'
+                  : '#fff',
+            borderColor:
+              selectedCustomAction === action.id ? '#10b981' : isOverlay ? 'rgba(255,255,255,0.7)' : 'var(--color-border, #e2e8f0)',
+            color: selectedCustomAction === action.id ? '#064e3b' : '#111827',
+            fontWeight: 600,
+          }}
+          onClick={() => onSelect(action.id)}
+        >
+          {action.label}
+        </button>
+      ))}
+      {onGenerate360 && (
+        <button
+          type="button"
+          className="button button-secondary"
+          disabled={generate360Disabled}
+          style={{
+            padding: isOverlay ? '0.28rem 0.72rem' : '0.4rem 1rem',
+            fontSize: isOverlay ? '0.78rem' : '0.85rem',
+            borderRadius: isOverlay ? '999px' : '8px',
+            background: isOverlay ? 'rgba(255,255,255,0.92)' : '#fff',
+            borderColor: isOverlay ? 'rgba(255,255,255,0.7)' : 'var(--color-border, #e2e8f0)',
+            color: '#111827',
+            fontWeight: 600,
+            opacity: generate360Disabled ? 0.6 : 1,
+          }}
+          onClick={onGenerate360}
+          title={generate360Disabled ? 'Generate a room image first' : 'Generate 360° video'}
+        >
+          Video
+        </button>
+      )}
+    </div>
+  )
+}
 
 const CUSTOMIZATION_LIBRARY: Record<
   CustomElementType,
@@ -100,6 +210,10 @@ const CUSTOMIZATION_LIBRARY: Record<
     { id: 'table_wood_light', label: 'Light wood', description: 'Light wood coffee/side tables.' },
     { id: 'table_glass_top', label: 'Glass top', description: 'Glass top with minimal base.' },
   ],
+  dining: [
+    { id: 'dining_table_set', label: 'Dining table set', description: 'Dining tables and chair sets for meal spaces.' },
+    { id: 'dining_chair_set', label: 'Dining chairs', description: 'Standalone dining chair options and finishes.' },
+  ],
   cabinet: [
     { id: 'cabinet_wood_warm', label: 'Warm wood', description: 'Warm wood storage cabinet fronts.' },
     { id: 'cabinet_white_flat', label: 'White flat panels', description: 'Flat white cabinet fronts.' },
@@ -124,79 +238,576 @@ const CUSTOMIZATION_LIBRARY: Record<
   ],
 }
 
-/** Map common color names to hex for table swatches (from style names and API color names) */
-const COLOR_NAME_TO_HEX: Record<string, string> = {
-  'warm white': '#f5f5dc',
-  'sage green': '#9dc183',
-  terracotta: '#c47244',
-  'charcoal grey': '#36454f',
-  'beige linen': '#e8dcc4',
-  'navy blue': '#000080',
-  'light beige': '#e8dcc4',
-  'slate gray': '#708090',
-  'slate grey': '#708090',
-  'dark charcoal': '#36454f',
-  'warm taupe': '#b38b6d',
-  'matte black': '#282828',
-  'pure white': '#fafafa',
-  'silver grey': '#c0c0c0',
-  'walnut brown': '#5c4033',
-  'oak natural': '#c4a574',
-  'white matte': '#f5f5f5',
-  // Floor / material style names (match start of style_name)
-  'warm beige': '#E3D9C6',
-  'soft white': '#F5F5F5',
-  sandstone: '#D8D1C5',
-  concrete: '#BEBEBE',
-  walnut: '#7A5230',
-  'walnut wood': '#7A5230',
-  oak: '#C79A6B',
-  'oak wood': '#C79A6B',
-  white: '#FFFFFF',
-  'grey slate': '#9A9A9A',
-  'dark granite': '#4B4B4B',
-  ivory: '#E6D8B5',
-  'urban concrete': '#AFAFAF',
-  travertine: '#D2C2A8',
-  teak: '#B38B5E',
-  'light grey': '#ECECEC',
-  'off white': '#F0EFEA',
-  charcoal: '#6F6F6F',
-  'natural stone': '#B7A28A',
-  'minimal concrete': '#DADADA',
-  'rustic wood': '#9B6F4A',
-  'stone grey': '#C4C4C4',
-  'industrial cement': '#8E8E8E',
-  cream: '#E1D4C4',
-  'dark walnut': '#5C3A21',
-  'beige stone': '#DCD0B0',
-  'modern grey': '#9E9E9E',
-  'soft cream': '#EFE6D8',
+/** Base components always shown in Customize (Wall, Floor, Ceiling, Glass partition, Decor). Detected components are merged with these. */
+const BASE_CUSTOMIZATION_COMPONENTS = ['wall', 'floor', 'ceiling', 'glass-partition', 'sofa', 'dining', 'decor'] as const
+
+function formatComponentLabel(type: string): string {
+  if (type === 'glass-partition') return 'Glass partition'
+  if (type === 'dining' || type === 'dinning') return 'Dining'
+  if (type === 'mattress') return 'Mattress'
+  if (type === 'bed') return 'Bed'
+  return type.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 }
-const HEX_REGEX = /^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$/
-function colorNameToHex(name: string): string {
-  if (!name?.trim()) return '#e5e7eb'
-  const key = name.toLowerCase().trim()
-  const found = COLOR_NAME_TO_HEX[key]
-  if (found) return found
-  let hash = 0
-  for (let i = 0; i < key.length; i++) hash = (hash + key.charCodeAt(i)) % 0xffffff
-  return '#' + (hash.toString(16).padStart(6, '0'))
+
+/** Show Bed catalog when the scene or user intent is bedroom-related (detection, Vastu bedroom, or text mentions bedroom). */
+const RUG_SLUGS = new Set([
+  'rug',
+  'carpet',
+  'area-rug',
+  'runner',
+  'runner-rug',
+  'dhurrie',
+  'bath-mat',
+  'bathmat',
+  'mat',
+])
+
+/** Map detection slugs to customization element keys (rug-like → carpet). */
+function normalizeCustomizationComponentSlug(slug: string): string {
+  const s = slug.trim().toLowerCase()
+  return RUG_SLUGS.has(s) ? 'carpet' : s
 }
-/** Extract color phrase from start of style name and return hex (e.g. "Warm Beige Tile Smooth" -> warm beige -> #E3D9C6) */
-function swatchHexFromOption(opt: { color?: string; label?: string }): string {
-  const raw = (opt.color ?? '').trim()
-  if (HEX_REGEX.test(raw)) return raw
-  if (raw) return colorNameToHex(raw)
-  const label = (opt.label ?? '').trim()
-  if (!label) return '#e5e7eb'
-  const words = label.split(/\s+/)
-  for (let len = Math.min(words.length, 4); len >= 1; len--) {
-    const phrase = words.slice(0, len).join(' ').toLowerCase()
-    const hex = COLOR_NAME_TO_HEX[phrase]
-    if (hex) return hex
-  }
-  return '#e5e7eb'
+
+function shouldOfferBedCustomization(args: {
+  detectedSlugs: string[]
+  configType: string | null
+  vastuRoomType: VastuRoomType
+  fullRoomText: string
+  optionalReconfigureNotes: string
+  arrangementPreferencesText: string
+}): boolean {
+  if (args.detectedSlugs.includes('bed')) return true
+  if (args.configType === 'vastu' && args.vastuRoomType === 'bedroom') return true
+  const blob = `${args.fullRoomText}\n${args.optionalReconfigureNotes}\n${args.arrangementPreferencesText}`
+  if (/\bbedroom\b/i.test(blob)) return true
+  if (/\bbed\b/i.test(blob)) return true
+  return false
+}
+
+/** Match backend: infer 1/2/3 Seater from product title when DB seating_capacity is empty. */
+function inferSofaSeatingFromLabel(label: string): string | undefined {
+  const s = label.toLowerCase().replace(/,/g, ' ')
+  if (/\b3[\s-]*seater\b/.test(s) || /\bthree[\s-]*seater\b/.test(s)) return '3 Seater'
+  if (/\b2[\s-]*seater\b/.test(s) || /\btwo[\s-]*seater\b/.test(s)) return '2 Seater'
+  if (/\b1[\s-]*seater\b/.test(s) || /\bone[\s-]*seater\b/.test(s) || /\bsingle[\s-]*seater\b/.test(s)) return '1 Seater'
+  return undefined
+}
+
+/** Option shape: id, label, description, optional color/material/texture/finish, optional imageUrl (for tiles), seating_capacity (for sofas). */
+export type CustomizationOption = {
+  id: string
+  label: string
+  description: string
+  color?: string
+  material?: string
+  texture?: string
+  finish?: string
+  imageUrl?: string
+  seating_capacity?: string
+}
+
+/** Options for a component: Supabase variations (e.g. mytyles_vitrified_tiles for floor/wall, sofa_products for sofa, mattress_products for mattress, bed_products for bed) or CUSTOMIZATION_LIBRARY fallback. Sofa, mattress, and bed use API only. */
+function getOptionsForComponent(
+  type: string,
+  productVariations: Partial<Record<string, CustomizationOption[]>>,
+): CustomizationOption[] {
+  if (type === 'sofa') return productVariations['sofa'] ?? []
+  if (type === 'mattress') return productVariations['mattress'] ?? []
+  if (type === 'bed') return productVariations['bed'] ?? []
+  if (type === 'carpet' || type === 'rug') return productVariations['carpet'] ?? productVariations['rug'] ?? []
+  if (productVariations[type]?.length) return productVariations[type]!
+  if (type in CUSTOMIZATION_LIBRARY) return CUSTOMIZATION_LIBRARY[type as CustomElementType]
+  return []
+}
+
+/** Shared: component chips, style/erase UI, summary — used in Step 4A (pre-first-gen) or on result card (after generation). */
+function InternalCustomizationPanel({
+  customizationComponentList,
+  selectedElementType,
+  setSelectedElementType,
+  selectedCustomAction,
+  customStyles,
+  setCustomStyles,
+  customActions,
+  setCustomActions,
+  setCustomHistory,
+  componentEraseAwaitingConfirm,
+  setComponentEraseAwaitingConfirm,
+  productVariations,
+  loadingVariations,
+  hasCustomizationSelection,
+  eraseRegionSelection,
+  eraseRegionCommitted,
+  resultPreviewImageUrl,
+  selectIdSuffix,
+  sectionTitle,
+  onApplyCustomization,
+  applyCustomizationDisabled,
+  applyCustomizationPending,
+}: {
+  customizationComponentList: string[]
+  selectedElementType: string | null
+  setSelectedElementType: (t: string) => void
+  selectedCustomAction: CustomAction
+  customStyles: Record<string, string | null>
+  setCustomStyles: Dispatch<SetStateAction<Record<string, string | null>>>
+  customActions: Record<string, CustomAction | null>
+  setCustomActions: Dispatch<SetStateAction<Record<string, CustomAction | null>>>
+  setCustomHistory: Dispatch<SetStateAction<Record<string, string | null>[]>>
+  componentEraseAwaitingConfirm: string | null
+  setComponentEraseAwaitingConfirm: Dispatch<SetStateAction<string | null>>
+  productVariations: Partial<Record<string, CustomizationOption[]>>
+  loadingVariations: boolean
+  hasCustomizationSelection: boolean
+  eraseRegionSelection: EraseRegion | null
+  /** Region erase counts toward Generate only after user confirms magnified preview */
+  eraseRegionCommitted: boolean
+  /** Full result thumbnail for component-erase confirmation (optional) */
+  resultPreviewImageUrl?: string | null
+  selectIdSuffix: string
+  sectionTitle?: string
+  /** Regenerate using selections (same as Step 6A Generate). */
+  onApplyCustomization?: () => void
+  applyCustomizationDisabled?: boolean
+  applyCustomizationPending?: boolean
+}) {
+  const pendingRegionErase = Boolean(eraseRegionSelection && !eraseRegionCommitted && selectedCustomAction === 'erase')
+  return (
+    <>
+      {sectionTitle ? (
+        <h4 style={{ margin: '0 0 0.65rem', fontSize: '1rem', color: '#0f172a' }}>{sectionTitle}</h4>
+      ) : null}
+      {pendingRegionErase ? (
+        <p
+          className="hint-text"
+          style={{
+            marginBottom: '0.65rem',
+            padding: '0.55rem 0.75rem',
+            borderRadius: 8,
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(217, 119, 6, 0.35)',
+            fontSize: '0.85rem',
+            color: '#92400e',
+          }}
+        >
+          <strong>Region erase:</strong> confirm the <strong>magnified preview</strong> above (purple box) before Generate.{' '}
+          <strong>Component tabs</strong> below are separate — they remove a <em>named</em> item (wall, chair…), not the rectangle you drew.
+        </p>
+      ) : null}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        {customizationComponentList.map((type) => (
+          <button
+            key={type}
+            type="button"
+            className="button button-secondary"
+            style={{
+              padding: '0.3rem 0.7rem',
+              fontSize: '0.8rem',
+              background: selectedElementType === type ? 'rgba(59, 130, 246, 0.12)' : undefined,
+              borderColor: selectedElementType === type ? '#3b82f6' : undefined,
+            }}
+            onClick={() => {
+              setSelectedElementType(type)
+              if (selectedCustomAction === 'erase') {
+                if (customStyles[type] === '__erase__') {
+                  setComponentEraseAwaitingConfirm(null)
+                } else {
+                  setComponentEraseAwaitingConfirm(type)
+                }
+              }
+            }}
+          >
+            {formatComponentLabel(type)}
+          </button>
+        ))}
+      </div>
+      {selectedElementType && (
+        <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+          {selectedCustomAction === 'erase' ? (
+            <>
+              <div className="label" style={{ marginBottom: '0.35rem' }}>
+                {formatComponentLabel(selectedElementType)} — {customActionDisplayLabel(selectedCustomAction)}
+              </div>
+              <div style={{ marginTop: '0.3rem' }}>
+              {customStyles[selectedElementType] === '__erase__' ? (
+                <>
+                  <p className="hint-text" style={{ marginBottom: '0.5rem' }}>
+                    <strong>{formatComponentLabel(selectedElementType)}</strong> is marked for removal.{' '}
+                    {onApplyCustomization ? (
+                      <>
+                        Click <strong>Apply customization</strong> below to apply, or undo below.
+                      </>
+                    ) : (
+                      <>
+                        Run <strong>Generate</strong> in Step 6A to apply, or undo below.
+                      </>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    style={{ borderColor: '#64748b' }}
+                    onClick={() => {
+                      setCustomHistory((prev) => [...prev, { ...customStyles }])
+                      setCustomActions((prev) => ({ ...prev, [selectedElementType]: null }))
+                      setCustomStyles((prev) => ({ ...prev, [selectedElementType]: null }))
+                      setComponentEraseAwaitingConfirm(null)
+                    }}
+                  >
+                    Undo removal mark for {formatComponentLabel(selectedElementType)}
+                  </button>
+                </>
+              ) : componentEraseAwaitingConfirm === selectedElementType ? (
+                <div
+                  role="dialog"
+                  aria-labelledby={`erase-confirm-heading-${selectIdSuffix}`}
+                  style={{
+                    marginTop: '0.25rem',
+                    padding: '1rem 1.1rem',
+                    borderRadius: '12px',
+                    border: '2px solid rgba(239, 68, 68, 0.45)',
+                    background: 'rgba(254, 242, 242, 0.95)',
+                    boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+                  }}
+                >
+                  <h4 id={`erase-confirm-heading-${selectIdSuffix}`} style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#991b1b' }}>
+                    Remove this component?
+                  </h4>
+                  {resultPreviewImageUrl ? (
+                    <div style={{ marginBottom: '0.75rem' }}>
+                      <p className="hint-text" style={{ marginBottom: '0.35rem', fontSize: '0.82rem' }}>
+                        Preview — your current result (target: <strong>{formatComponentLabel(selectedElementType)}</strong>). The model uses this scene plus the label; it does not auto-detect pixels.
+                      </p>
+                      <img
+                        src={resultPreviewImageUrl}
+                        alt={`Current room result; confirming removal of ${formatComponentLabel(selectedElementType)}`}
+                        style={{
+                          width: '100%',
+                          maxHeight: 200,
+                          objectFit: 'contain',
+                          borderRadius: 10,
+                          border: '1px solid rgba(148, 163, 184, 0.5)',
+                          background: '#0f172a',
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  <p style={{ margin: '0 0 0.35rem', fontSize: '0.9rem', color: '#1e293b' }}>
+                    You selected <strong>{formatComponentLabel(selectedElementType)}</strong>. The AI will try to remove this element from your image while keeping room layout and camera the same.
+                  </p>
+                  <p className="hint-text" style={{ marginBottom: '0.75rem', fontSize: '0.82rem' }}>
+                    Is this what you want to erase? If not, choose <strong>No</strong> and tap another component tab (e.g. Coffee table instead of Wall).
+                  </p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => setComponentEraseAwaitingConfirm(null)}
+                    >
+                      No — I&apos;ll pick another component
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      style={{
+                        background: '#b91c1c',
+                        borderColor: '#991b1b',
+                        color: '#fff',
+                      }}
+                      onClick={() => {
+                        setCustomHistory((prev) => [...prev, { ...customStyles }])
+                        setCustomActions((prev) => ({ ...prev, [selectedElementType]: 'erase' }))
+                        setCustomStyles((prev) => ({ ...prev, [selectedElementType]: '__erase__' }))
+                        setComponentEraseAwaitingConfirm(null)
+                      }}
+                    >
+                      Yes — mark {formatComponentLabel(selectedElementType)} for removal
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="hint-text" style={{ marginTop: '0.15rem' }}>
+                  Tap a <strong>component tab</strong> above (e.g. Coffee table). You&apos;ll see a preview and must confirm before anything is marked for removal — or use the <strong>Erase on this result</strong> tab on the image to draw a purple box.
+                </p>
+              )}
+            </div>
+            </>
+          ) : (
+            <fieldset style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+              <legend className="label" style={{ padding: 0, marginBottom: '0.35rem' }}>
+                {formatComponentLabel(selectedElementType)} — {customActionDisplayLabel(selectedCustomAction)} — choose a look
+              </legend>
+              <CustomizationStyleGrid
+                variant={
+                  selectedElementType === 'sofa' ||
+                  selectedElementType === 'mattress' ||
+                  selectedElementType === 'bed' ||
+                  selectedElementType === 'carpet' ||
+                  selectedElementType === 'rug'
+                    ? 'large'
+                    : 'compact'
+                }
+                options={getOptionsForComponent(selectedElementType, productVariations)}
+                value={
+                  customStyles[selectedElementType] === '__erase__'
+                    ? ''
+                    : (customStyles[selectedElementType] ?? '')
+                }
+                onChange={(id) => {
+                  setCustomHistory((prev) => [...prev, { ...customStyles }])
+                  if (id) {
+                    setCustomActions((prev) => ({ ...prev, [selectedElementType]: selectedCustomAction }))
+                  }
+                  setCustomStyles((prev) => ({ ...prev, [selectedElementType]: id }))
+                }}
+                loading={loadingVariations}
+                emptyMessage="No styles available for this component yet."
+              />
+            </fieldset>
+          )}
+        </div>
+      )}
+      {(hasCustomizationSelection || eraseRegionSelection) && (
+        <div style={{ marginBottom: '0.25rem', padding: '0.6rem 0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.25)', fontSize: '0.85rem' }}>
+          <strong style={{ color: '#0f766e' }}>Selected customizations</strong>
+          <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.2rem', color: '#134e4a' }}>
+            {eraseRegionSelection ? (
+              <li>
+                {eraseRegionCommitted
+                  ? 'Erase region: confirmed — this rectangle will be inpainted when you Generate'
+                  : 'Erase region: draw done — confirm the magnified preview above'}
+              </li>
+            ) : null}
+            {Object.keys(customStyles).map((type) => {
+              const id = customStyles[type]
+              if (id == null) return null
+              const action = customActions[type] ?? 'edit'
+              const label = id === '__erase__'
+                ? 'Erase'
+                : getOptionsForComponent(type, productVariations).find((o) => o.id === id)?.label ?? id
+              return <li key={type}>{formatComponentLabel(type)} ({action}): {label}</li>
+            })}
+          </ul>
+          {onApplyCustomization ? (
+            <div style={{ marginTop: '0.65rem' }}>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={Boolean(applyCustomizationDisabled)}
+                style={{
+                  background: '#0d9488',
+                  borderColor: '#0f766e',
+                  color: '#fff',
+                  fontWeight: 600,
+                }}
+                onClick={() => onApplyCustomization()}
+              >
+                {applyCustomizationPending ? (
+                  <>
+                    <span className="spinner" aria-hidden style={{ marginRight: '0.35rem' }} />
+                    Regenerating…
+                  </>
+                ) : (
+                  'Apply customization'
+                )}
+              </button>
+              <p className="hint-text" style={{ margin: '0.4rem 0 0', fontSize: '0.78rem', color: '#475569' }}>
+                Regenerates the image using your layout, current result (when available), and the selections above.
+              </p>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** Exterior category chips, catalog grid, summary, Apply — Step 4B and under-result (customization mode). */
+function ExternalCustomizationPanel({
+  selectedExternalCategory,
+  setSelectedExternalCategory,
+  externalCustomization,
+  setExternalCustomization,
+  externalCustomHistory,
+  setExternalCustomHistory,
+  externalProductVariations,
+  loadingExternalVariations,
+  onApplyCustomization,
+  applyCustomizationDisabled,
+  applyCustomizationPending,
+  sectionTitle,
+  eraseRegionSelection,
+  eraseRegionCommitted,
+}: {
+  selectedExternalCategory: ExternalCategory | null
+  setSelectedExternalCategory: Dispatch<SetStateAction<ExternalCategory | null>>
+  externalCustomization: ExternalCustomizationState
+  setExternalCustomization: Dispatch<SetStateAction<ExternalCustomizationState>>
+  externalCustomHistory: ExternalCustomizationState[]
+  setExternalCustomHistory: Dispatch<SetStateAction<ExternalCustomizationState[]>>
+  externalProductVariations: Partial<Record<ExternalCategory, StyleGridOption[]>>
+  loadingExternalVariations: boolean
+  onApplyCustomization: () => void
+  applyCustomizationDisabled: boolean
+  applyCustomizationPending: boolean
+  sectionTitle?: string
+  eraseRegionSelection?: EraseRegion | null
+  eraseRegionCommitted?: boolean
+}) {
+  const hasExtCatalog = EXTERNAL_CATEGORIES.some(
+    (cat) => externalCustomization[cat] != null && externalCustomization[cat] !== ''
+  )
+  const showApplyBlock = hasExtCatalog || Boolean(eraseRegionSelection)
+  return (
+    <>
+      {sectionTitle ? (
+        <h4 style={{ margin: '0 0 0.65rem', fontSize: '1rem', color: '#0f172a' }}>{sectionTitle}</h4>
+      ) : null}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0.5rem',
+          marginBottom: '0.75rem',
+        }}
+      >
+        {EXTERNAL_CATEGORIES.map((cat) => (
+          <button
+            key={cat}
+            type="button"
+            className="button button-secondary"
+            style={{
+              padding: '0.35rem 0.75rem',
+              fontSize: '0.8rem',
+              background: selectedExternalCategory === cat ? 'rgba(13, 148, 136, 0.12)' : undefined,
+              borderColor: selectedExternalCategory === cat ? 'var(--color-primary)' : undefined,
+            }}
+            onClick={() => setSelectedExternalCategory(cat)}
+          >
+            {EXTERNAL_CATEGORY_LABELS[cat]}
+          </button>
+        ))}
+      </div>
+      {selectedExternalCategory && (
+        <>
+          <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>
+            <strong>{EXTERNAL_CATEGORY_LABELS[selectedExternalCategory]} — catalog</strong>
+          </p>
+          <CustomizationStyleGrid
+            variant="compact"
+            options={
+              externalProductVariations[selectedExternalCategory]?.length
+                ? externalProductVariations[selectedExternalCategory]!
+                : EXTERNAL_CUSTOMIZATION_PRESETS[selectedExternalCategory]
+            }
+            value={externalCustomization[selectedExternalCategory] ?? ''}
+            onChange={(id) => {
+              setExternalCustomHistory((prev) => [...prev, { ...externalCustomization }])
+              setExternalCustomization((prev) => ({
+                ...prev,
+                [selectedExternalCategory]: id,
+              }))
+            }}
+            loading={loadingExternalVariations}
+            emptyMessage="No catalog entries for this category."
+          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem', marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => {
+                setExternalCustomHistory((prev) => [...prev, { ...externalCustomization }])
+                setExternalCustomization((prev) => ({
+                  ...prev,
+                  [selectedExternalCategory]: null,
+                }))
+              }}
+            >
+              Reset this category
+            </button>
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={externalCustomHistory.length === 0}
+              onClick={() => {
+                setExternalCustomHistory((prev) => {
+                  if (prev.length === 0) return prev
+                  const last = prev[prev.length - 1]
+                  setExternalCustomization(last)
+                  return prev.slice(0, prev.length - 1)
+                })
+              }}
+            >
+              Undo last change
+            </button>
+          </div>
+        </>
+      )}
+      {showApplyBlock && (
+        <div
+          style={{
+            marginBottom: '0.75rem',
+            marginTop: '0.75rem',
+            padding: '0.6rem 0.75rem',
+            background: 'rgba(16, 185, 129, 0.08)',
+            borderRadius: '8px',
+            border: '1px solid rgba(16, 185, 129, 0.25)',
+            fontSize: '0.85rem',
+          }}
+        >
+          <strong style={{ color: '#0f766e' }}>Selected exterior styles</strong>
+          <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.2rem', color: '#134e4a' }}>
+            {eraseRegionSelection ? (
+              <li>
+                {eraseRegionCommitted
+                  ? 'Erase region: confirmed — this rectangle will be inpainted when you Generate'
+                  : 'Erase region: draw done — confirm the magnified preview above'}
+              </li>
+            ) : null}
+            {EXTERNAL_CATEGORIES.map((cat) => {
+              const id = externalCustomization[cat]
+              if (id == null || id === '') return null
+              const opts = externalProductVariations[cat]?.length
+                ? externalProductVariations[cat]!
+                : EXTERNAL_CUSTOMIZATION_PRESETS[cat]
+              const label = opts.find((o) => o.id === id)?.label ?? id
+              return (
+                <li key={cat}>
+                  {EXTERNAL_CATEGORY_LABELS[cat]}: {label}
+                </li>
+              )
+            })}
+          </ul>
+          <div style={{ marginTop: '0.65rem' }}>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={applyCustomizationDisabled}
+              style={{
+                background: '#0d9488',
+                borderColor: '#0f766e',
+                color: '#fff',
+                fontWeight: 600,
+              }}
+              onClick={() => onApplyCustomization()}
+            >
+              {applyCustomizationPending ? (
+                <>
+                  <span className="spinner" aria-hidden style={{ marginRight: '0.35rem' }} />
+                  Regenerating…
+                </>
+              ) : (
+                'Apply customization'
+              )}
+            </button>
+            <p className="hint-text" style={{ margin: '0.4rem 0 0', fontSize: '0.78rem', color: '#475569' }}>
+              Regenerates using your layout, current result when available, and the exterior selections above.
+            </p>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
 /**
@@ -204,14 +815,17 @@ function swatchHexFromOption(opt: { color?: string; label?: string }): string {
  * Flow: Step 1 = Select Configuration Type (Internal/External) → Upload → AI Detection → Config Mode → Generate
  */
 export default function Home() {
+  const lastGenerationRequestRef = useRef<{ key: string; at: number } | null>(null)
+  const DUPLICATE_GENERATION_WINDOW_MS = 12000
+
   // Step 1: Configuration type (must select before upload)
   const [configType, setConfigType] = useState<ConfigType>(null)
 
   // State for uploaded images (base64 strings)
   const [images, setImages] = useState<string[]>([])
   
-  // State for configuration mode: 'purpose' | 'arrangement' (internal) or same for external
-  const [configMode, setConfigMode] = useState<'purpose' | 'arrangement'>('purpose')
+  // State for configuration mode: full room, component-based, or customization (internal & external)
+  const [configMode, setConfigMode] = useState<'purpose' | 'arrangement' | 'customization'>('purpose')
 
   // Style selection (Step 4): applied to both interior and exterior flows
   const [selectedStyle, setSelectedStyle] = useState<string | null>(null)
@@ -220,6 +834,9 @@ export default function Home() {
   // State for Full Room Configuration: reference image(s) and single combined text (purpose + preferences)
   const [fullRoomReferenceImages, setFullRoomReferenceImages] = useState<string[]>([])
   const [fullRoomText, setFullRoomText] = useState('')
+  /** Optional Step 4: extra notes + style reference images (bedroom/kitchen cues, etc.) */
+  const [optionalReconfigureNotes, setOptionalReconfigureNotes] = useState('')
+  const [optionalReconfigureReferenceImages, setOptionalReconfigureReferenceImages] = useState<string[]>([])
   
   // State for component-based configuration
   const [arrangementConfig, setArrangementConfig] = useState({
@@ -255,9 +872,9 @@ export default function Home() {
   
   // State for generated result
   const [generatedImage, setGeneratedImage] = useState<string | null>(null)
-  // Original image from API (no watermark) – used when user clicks "Remove watermark"
+  // Original image from API (no watermark) – kept for backend/edit flows and reapplying watermark if needed.
   const [generatedImageOriginal, setGeneratedImageOriginal] = useState<string | null>(null)
-  // Whether the displayed image currently has the watermark (so we can toggle Remove / Add watermark)
+  // Whether the displayed result currently has the watermark applied.
   const [showWatermark, setShowWatermark] = useState(true)
   // For before/after comparison: layout reference (first time) or image before customization (each customization loop)
   const [comparisonBeforeImageUrl, setComparisonBeforeImageUrl] = useState<string | null>(null)
@@ -265,7 +882,13 @@ export default function Home() {
   const [generatedImageHistory, setGeneratedImageHistory] = useState<string[]>([])
   // Generation history: last N generated results (newest first), for browsing and reloading
   const [generationHistory, setGenerationHistory] = useState<string[]>([])
+  /** Same order/length as generationHistory: API image (no watermark) for each version — fixes slider/findIndex when user toggles watermark */
+  const [generationHistoryOriginal, setGenerationHistoryOriginal] = useState<string[]>([])
   const MAX_GENERATION_HISTORY = 20
+  // Stable key for comparison slider: increment when "after" image changes so slider remounts and never stacks layers
+  const [comparisonSliderKey, setComparisonSliderKey] = useState(0)
+  /** When true, show room editor instead of the default before/after preview (no separate “Compare” tab). */
+  const [showDirectEditPanel, setShowDirectEditPanel] = useState(false)
   // State for user favourites (saved generated images)
   const [favoriteImages, setFavoriteImages] = useState<string[]>([])
   
@@ -274,54 +897,177 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
 
-  // Image type validation: internal vs external (warn when user uploads wrong type)
-  const [imageTypeValidation, setImageTypeValidation] = useState<{ valid: boolean; message: string } | null>(null)
+  // Image type validation: strict mode check for all uploaded images
+  const [imageTypeValidation, setImageTypeValidation] = useState<{
+    valid: boolean
+    message: string
+    invalidImageIndices?: number[]
+  } | null>(null)
   const [isValidatingImageType, setIsValidatingImageType] = useState(false)
 
   // Post-generation visual customization (Customize mode)
   const [isCustomizing, setIsCustomizing] = useState(false)
   const [isEditingStylePalette, setIsEditingStylePalette] = useState(false)
-  const [selectedElementType, setSelectedElementType] = useState<CustomElementType | null>(null)
+  /** Internal & external: after each generate, user must finalize style before Customize/Add/Replace/Erase on the result. */
+  const [styleFinalizeGatePassed, setStyleFinalizeGatePassed] = useState(false)
+  const [showStyleReviewPanel, setShowStyleReviewPanel] = useState(false)
+  const [lastAppliedStylePaletteKey, setLastAppliedStylePaletteKey] = useState('')
+  const {
+    selectedElementType,
+    setSelectedElementType,
+    customStyles,
+    setCustomStyles,
+    customActions,
+    setCustomActions,
+    selectedCustomAction,
+    setSelectedCustomAction,
+    customHistory,
+    setCustomHistory,
+    eraseRegionSelection,
+    setEraseRegionSelection,
+    eraseRegionConfirmed,
+    setEraseRegionConfirmed,
+    componentEraseAwaitingConfirm,
+    setComponentEraseAwaitingConfirm,
+    externalCustomization,
+    setExternalCustomization,
+    selectedExternalCategory,
+    setSelectedExternalCategory,
+    externalCustomHistory,
+    setExternalCustomHistory,
+    resetCustomization,
+  } = useCustomization()
   const [customClickPosition, setCustomClickPosition] = useState<{ x: number; y: number } | null>(null)
-  const [customStyles, setCustomStyles] = useState<Record<CustomElementType, string | null>>({
-    wall: null,
-    floor: null,
-    ceiling: null,
-    sofa: null,
-    chair: null,
-    desk: null,
-    table: null,
-    cabinet: null,
-    door: null,
-    window: null,
-    'glass-partition': null,
-    decor: null,
-  })
-  const [customHistory, setCustomHistory] = useState<Record<CustomElementType, string | null>[]>([])
-  // Product variations from Supabase (by component type). null = not loaded, [] = loaded empty, array = use these options
-  const [productVariations, setProductVariations] = useState<Partial<Record<CustomElementType, { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }[]>>>({})
+  // Dynamic component list: base (wall, floor, ceiling, glass-partition, decor) + detected from generated image
+  const [detectedCustomizationComponents, setDetectedCustomizationComponents] = useState<string[]>([])
+  const [isDetectingComponents, setIsDetectingComponents] = useState(false)
+  const customizationComponentList = useMemo(() => {
+    const normalizedSlugs = Array.from(
+      new Set(detectedCustomizationComponents.map(normalizeCustomizationComponentSlug)),
+    )
+    const detected = normalizedSlugs.filter(
+      (c) => !(BASE_CUSTOMIZATION_COMPONENTS as readonly string[]).includes(c),
+    )
+    let merged = [...BASE_CUSTOMIZATION_COMPONENTS, ...detected]
+    const offerBed = shouldOfferBedCustomization({
+      detectedSlugs: detectedCustomizationComponents,
+      configType,
+      vastuRoomType: vastuPreferences.roomType,
+      fullRoomText,
+      optionalReconfigureNotes,
+      arrangementPreferencesText: arrangementConfig.arrangementPreferencesText,
+    })
+    if (offerBed && !merged.includes('bed')) {
+      const sofaIdx = merged.indexOf('sofa')
+      if (sofaIdx !== -1) {
+        merged = [...merged.slice(0, sofaIdx + 1), 'bed', ...merged.slice(sofaIdx + 1)]
+      } else {
+        merged = [...merged, 'bed']
+      }
+    }
+    const bedIdx = merged.indexOf('bed')
+    if (bedIdx !== -1 && !merged.includes('mattress')) {
+      return [...merged.slice(0, bedIdx + 1), 'mattress', ...merged.slice(bedIdx + 1)]
+    }
+    return merged
+  }, [
+    detectedCustomizationComponents,
+    configType,
+    vastuPreferences.roomType,
+    fullRoomText,
+    optionalReconfigureNotes,
+    arrangementConfig.arrangementPreferencesText,
+  ])
+  // Product variations from Supabase (by component type). Supports any string key for dynamic components.
+  const [productVariations, setProductVariations] = useState<Partial<Record<string, CustomizationOption[]>>>({})
   const [loadingVariations, setLoadingVariations] = useState(false)
 
-  // External customization (when configType === 'external'): categories and presets
-  const [externalCustomization, setExternalCustomization] = useState<ExternalCustomizationState>(
-    getInitialExternalCustomization
-  )
-  const [selectedExternalCategory, setSelectedExternalCategory] = useState<ExternalCategory | null>(null)
-  const [externalCustomHistory, setExternalCustomHistory] = useState<ExternalCustomizationState[]>([])
+  /** Room editor store: live canvas image for Add/Replace/Erase (lift-style) on the result. */
+  const liftWorkingImage = useRoomEditorStore((s) => s.workingImage)
   // External: product_variations from Supabase by category (facade, window, door, etc.)
-  const [externalProductVariations, setExternalProductVariations] = useState<Partial<Record<ExternalCategory, { id: string; label: string; description: string }[]>>>({})
+  const [externalProductVariations, setExternalProductVariations] = useState<
+    Partial<Record<ExternalCategory, StyleGridOption[]>>
+  >({})
   const [loadingExternalVariations, setLoadingExternalVariations] = useState(false)
 
   /** Wizard: current step (1 = type, 2 = upload, 3 = layout reference, 4 = configure & generate) */
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1)
   /** Index of the uploaded image chosen as layout reference (locks structure/camera). Null until user selects in step 3. */
   const [layoutReferenceImageIndex, setLayoutReferenceImageIndex] = useState<number | null>(null)
+  const generationHistoryPanelRef = useRef<HTMLDivElement | null>(null)
+  /** Generation history card is hidden until user clicks History in the preview toolbar. */
+  const [showGenerationHistoryPanel, setShowGenerationHistoryPanel] = useState(false)
+  const [tourStartSignal, setTourStartSignal] = useState(0)
+  /** In customization mode after finalize: hide layout/config/generate; user can expand to edit. */
+  const [customizationSetupExpanded, setCustomizationSetupExpanded] = useState(false)
+
+  useWizardState({
+    apply: {
+      setConfigType,
+      setConfigMode,
+      setWizardStep,
+      setLayoutReferenceImageIndex,
+      setImages,
+      setSelectedStyle,
+      setSelectedColorPalette,
+      setFullRoomText,
+      setFullRoomReferenceImages,
+      setVastuEnabled,
+      setVastuPreferences,
+      setGeneratedImage,
+      setGeneratedImageOriginal,
+      setShowWatermark,
+    },
+    deps: [
+      configType,
+      configMode,
+      wizardStep,
+      layoutReferenceImageIndex,
+      images,
+      selectedStyle,
+      selectedColorPalette,
+      fullRoomText,
+      fullRoomReferenceImages,
+      vastuEnabled,
+      vastuPreferences,
+      generatedImage,
+      generatedImageOriginal,
+      showWatermark,
+      customStyles,
+      customActions,
+      selectedCustomAction,
+      customHistory,
+      eraseRegionSelection,
+      eraseRegionConfirmed,
+      componentEraseAwaitingConfirm,
+      externalCustomization,
+      selectedExternalCategory,
+      externalCustomHistory,
+    ],
+    getSnapshot: () => ({
+      configType,
+      configMode,
+      wizardStep,
+      layoutReferenceImageIndex,
+      images,
+      selectedStyle,
+      selectedColorPalette,
+      fullRoomText,
+      fullRoomReferenceImages,
+      vastuEnabled,
+      vastuPreferences,
+      generatedImage,
+      generatedImageOriginal,
+      showWatermark,
+    }),
+  })
 
   /**
    * Handle configuration type change (Step 1)
    */
   const handleConfigTypeChange = (type: ConfigType) => {
     setConfigType(type)
+    setConfigMode('purpose')
     setImages([])
     setProductVariations({})
     setExternalProductVariations({})
@@ -332,6 +1078,7 @@ export default function Home() {
     setGeneratedImageHistory([])
      setFavoriteImages([])
     setDetectedComponents([])
+    setDetectedCustomizationComponents([])
     setComponentDecisions({})
     setAddNewComponents(null)
     setAnalysisFullReport(null)
@@ -350,30 +1097,18 @@ export default function Home() {
     setWarning(null)
     setImageTypeValidation(null)
     setIsCustomizing(false)
-    setSelectedElementType(null)
+    resetCustomization()
     setCustomClickPosition(null)
-    setCustomStyles({
-      wall: null,
-      floor: null,
-      ceiling: null,
-      sofa: null,
-      chair: null,
-      desk: null,
-      table: null,
-      cabinet: null,
-      door: null,
-      window: null,
-      'glass-partition': null,
-      decor: null,
-    })
-    setCustomHistory([])
     setSelectedStyle(null)
     setSelectedColorPalette(null)
-    setExternalCustomization(getInitialExternalCustomization())
-    setSelectedExternalCategory(null)
-    setExternalCustomHistory([])
+    setStyleFinalizeGatePassed(false)
+    setShowStyleReviewPanel(false)
+    setLastAppliedStylePaletteKey('')
+    setShowDirectEditPanel(false)
     setWizardStep(1)
     setLayoutReferenceImageIndex(null)
+    setOptionalReconfigureNotes('')
+    setOptionalReconfigureReferenceImages([])
   }
 
   /**
@@ -394,6 +1129,7 @@ export default function Home() {
       arrangementPreferencesText: '',
     })
     setDetectedComponents([])
+    setDetectedCustomizationComponents([])
     setComponentDecisions({})
     setAddNewComponents(null)
     setIsAnalyzing(false)
@@ -409,39 +1145,31 @@ export default function Home() {
     })
     setComponentReferenceImages([])
     setComponentReferenceLabels([])
+    setOptionalReconfigureNotes('')
+    setOptionalReconfigureReferenceImages([])
     setGeneratedImage(null)
     setGeneratedImageOriginal(null)
     setShowWatermark(true)
     setComparisonBeforeImageUrl(null)
     setGeneratedImageHistory([])
+    setGenerationHistory([])
+    setGenerationHistoryOriginal([])
+    setShowGenerationHistoryPanel(false)
     setFavoriteImages([])
     setIsGenerating(false)
     setError(null)
     setWarning(null)
     setImageTypeValidation(null)
     setIsCustomizing(false)
-    setSelectedElementType(null)
+    resetCustomization()
     setCustomClickPosition(null)
-    setCustomStyles({
-      wall: null,
-      floor: null,
-      ceiling: null,
-      sofa: null,
-      chair: null,
-      desk: null,
-      table: null,
-      cabinet: null,
-      door: null,
-      window: null,
-      'glass-partition': null,
-      decor: null,
-    })
-    setCustomHistory([])
     setSelectedStyle(null)
     setSelectedColorPalette(null)
-    setExternalCustomization(getInitialExternalCustomization())
-    setSelectedExternalCategory(null)
-    setExternalCustomHistory([])
+    setIsEditingStylePalette(false)
+    setStyleFinalizeGatePassed(false)
+    setShowStyleReviewPanel(false)
+    setLastAppliedStylePaletteKey('')
+    setShowDirectEditPanel(false)
   }
 
   /**
@@ -457,27 +1185,22 @@ export default function Home() {
       setShowWatermark(true)
       setComparisonBeforeImageUrl(null)
        setFavoriteImages([])
+      if (configMode === 'customization') {
+        setStyleFinalizeGatePassed(true)
+        setLastAppliedStylePaletteKey(stylePaletteKey(null, null))
+      } else {
+        setStyleFinalizeGatePassed(false)
+        setLastAppliedStylePaletteKey('')
+      }
+      setShowStyleReviewPanel(false)
+      setShowDirectEditPanel(false)
       setIsCustomizing(false)
-      setSelectedElementType(null)
+      resetCustomization()
       setCustomClickPosition(null)
-      setCustomStyles({
-        wall: null,
-        floor: null,
-        ceiling: null,
-        sofa: null,
-        chair: null,
-        desk: null,
-        table: null,
-        cabinet: null,
-        door: null,
-        window: null,
-        'glass-partition': null,
-        decor: null,
-      })
-      setCustomHistory([])
     }
     if (configMode === 'arrangement') {
       setDetectedComponents([])
+      setDetectedCustomizationComponents([])
       setComponentDecisions({})
       setAddNewComponents(null)
       setAnalysisFullReport(null)
@@ -487,23 +1210,146 @@ export default function Home() {
   /**
    * Handle configuration mode change
    */
-  const handleConfigModeChange = (mode: 'purpose' | 'arrangement') => {
+  const handleConfigModeChange = (mode: 'purpose' | 'arrangement' | 'customization') => {
     setConfigMode(mode)
+    if (mode === 'customization') {
+      setOptionalReconfigureNotes('')
+      setOptionalReconfigureReferenceImages([])
+      setSelectedStyle(null)
+      setSelectedColorPalette(null)
+      setLastAppliedStylePaletteKey(stylePaletteKey(null, null))
+      setStyleFinalizeGatePassed(true)
+      setShowStyleReviewPanel(false)
+      useRoomEditorStore.getState().setEditOptions({
+        selectedStyleId: undefined,
+        selectedColorPaletteId: undefined,
+      })
+    }
     setGeneratedImage(null)
     setGeneratedImageOriginal(null)
     setShowWatermark(true)
     setComparisonBeforeImageUrl(null)
     setFavoriteImages([])
+    if (mode !== 'customization') {
+      setStyleFinalizeGatePassed(false)
+      setShowStyleReviewPanel(false)
+      setLastAppliedStylePaletteKey('')
+    }
+    setShowDirectEditPanel(false)
     if (mode !== 'arrangement') {
       setAddNewComponents(null)
     }
     setIsCustomizing(false)
-    setSelectedElementType(null)
+    if (mode === 'customization') {
+      if (configType === 'external') {
+        setSelectedExternalCategory((c) => c ?? EXTERNAL_CATEGORIES[0])
+        setSelectedElementType(null)
+      } else {
+        setSelectedElementType(BASE_CUSTOMIZATION_COMPONENTS[0] ?? 'wall')
+      }
+    } else {
+      setSelectedElementType(null)
+    }
+    setSelectedCustomAction('edit')
+    if (mode !== 'customization') {
+      setCustomActions({})
+    }
     setCustomHistory([])
+    setComponentEraseAwaitingConfirm(null)
+    setEraseRegionSelection(null)
+    setEraseRegionConfirmed(false)
   }
 
+  const applyRoomEditorResultToGeneration = useCallback(
+    async (newImageUrl: string) => {
+      try {
+        const watermarkedUrl = await applyWatermarkToImage(newImageUrl)
+        setGeneratedImage(watermarkedUrl)
+        setGeneratedImageOriginal(newImageUrl)
+        setShowWatermark(true)
+      } catch {
+        // Fallback: show unwatermarked if watermarking fails
+        setGeneratedImage(newImageUrl)
+        setGeneratedImageOriginal(newImageUrl)
+        setShowWatermark(false)
+      }
+      // Do not append room-editor "Apply" as a new generated version.
+      // History versions should represent explicit Generate/Regenerate actions only.
+      setComparisonSliderKey((k) => k + 1)
+    },
+    []
+  )
+
+  /** Customize / Add / Replace / Erase in Step 4A — clears component-erase preview when leaving Erase. */
+  const handleCustomizationActionInStep4 = useCallback((action: CustomAction) => {
+    setSelectedCustomAction(action)
+    if (action === 'add' || action === 'replace' || action === 'erase') {
+      useRoomEditorStore.getState().setMode(action)
+      setEraseRegionSelection(null)
+      setEraseRegionConfirmed(false)
+    } else {
+      useRoomEditorStore.getState().setMode('idle')
+    }
+    if (configType !== 'internal' && configType !== 'external') return
+    // Don’t auto-open component confirmation (e.g. Wall) — user picks a tab when they mean component erase
+    setComponentEraseAwaitingConfirm(null)
+  }, [configType])
+
+  /** From under-result bar: set action and enter the right UI without clearing the current image (unlike handleConfigModeChange). */
+  const handleCustomizationActionFromResult = useCallback(
+    (action: CustomAction) => {
+      setSelectedCustomAction(action)
+      if (action === 'add' || action === 'replace' || action === 'erase') {
+        useRoomEditorStore.getState().setMode(action)
+        setEraseRegionSelection(null)
+        setEraseRegionConfirmed(false)
+      } else {
+        useRoomEditorStore.getState().setMode('idle')
+      }
+      if (configType === 'internal') {
+        if (action !== 'erase') {
+          setComponentEraseAwaitingConfirm(null)
+        }
+        if (configMode !== 'customization') {
+          setConfigMode('customization')
+          const nextEl = selectedElementType ?? BASE_CUSTOMIZATION_COMPONENTS[0] ?? 'wall'
+          setSelectedElementType(nextEl)
+        }
+        // Erase: lift-style tools below; scroll to result tools
+        if (action === 'erase') setComponentEraseAwaitingConfirm(null)
+        if (action === 'add' || action === 'replace' || action === 'erase') {
+          requestAnimationFrame(() => {
+            const anchor =
+              generatedImageOriginal ?? generatedImage ? 'result-output-anchor' : 'step-5a-erase-anchor'
+            document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          })
+        }
+      } else if (configType === 'external') {
+        if (action !== 'erase') {
+          setComponentEraseAwaitingConfirm(null)
+        }
+        if (configMode !== 'customization') {
+          setConfigMode('customization')
+          setSelectedExternalCategory((c) => c ?? EXTERNAL_CATEGORIES[0])
+          setSelectedElementType(null)
+        }
+        if (action === 'erase') setComponentEraseAwaitingConfirm(null)
+        if (action === 'add' || action === 'replace' || action === 'erase') {
+          requestAnimationFrame(() => {
+            const anchor =
+              generatedImageOriginal ?? generatedImage
+                ? 'result-output-anchor'
+                : 'step-5b-external-erase-anchor'
+            document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          })
+        }
+      }
+    },
+    [configType, configMode, selectedElementType, generatedImage, generatedImageOriginal]
+  )
+
   // Min images: internal 4+, external 3+
-  const minImages = configType === 'external' ? 3 : 4
+  const minImages = 4
   const maxImages = 6
 
   /** Can proceed from Upload step only when: enough images + AI analysis says correct type (interior for internal, building for external). No proceeding otherwise. */
@@ -597,11 +1443,8 @@ export default function Home() {
     setImageTypeValidation(null)
 
     const timer = setTimeout(() => {
-      // Sample first and last image so we catch wrong type even if user adds bad images at the end (keep payload small)
-      const imagesToValidate =
-        images.length <= 2
-          ? images.slice(0, 2)
-          : [images[0], images[images.length - 1]]
+      // Send all uploaded images (cap 6) so validation can require every photo to match the mode.
+      const imagesToValidate = images.slice(0, 6)
       fetch('/api/validate-image-type', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -612,23 +1455,34 @@ export default function Home() {
       })
         .then(async (res) => {
           const text = await res.text()
-          let data: { valid?: boolean; message?: string } = {}
+          let data: { valid?: boolean; message?: string; invalidImageIndices?: number[] } = {}
           try {
             data = JSON.parse(text)
           } catch {
-            if (!res.ok) return { valid: false, message: text || 'Validation failed.' }
+            if (!res.ok) return { valid: false, message: text || 'Validation failed.', invalidImageIndices: imagesToValidate.map((_, idx) => idx) }
           }
           return {
             valid: res.ok && data.valid === true,
             message: data?.message || (res.ok ? 'Images match.' : 'Image type does not match configuration.'),
+            invalidImageIndices: Array.isArray(data?.invalidImageIndices) ? data.invalidImageIndices : [],
           }
         })
         .then((data) => {
           if (cancelled) return
-          setImageTypeValidation({ valid: data.valid === true, message: data.message || '' })
+          setImageTypeValidation({
+            valid: data.valid === true,
+            message: data.message || '',
+            invalidImageIndices: data.invalidImageIndices || [],
+          })
         })
         .catch(() => {
-          if (!cancelled) setImageTypeValidation({ valid: true, message: 'Images accepted.' })
+          if (!cancelled) {
+            setImageTypeValidation({
+              valid: false,
+              message: "We couldn't verify your images. Please try again.",
+              invalidImageIndices: imagesToValidate.map((_, idx) => idx),
+            })
+          }
         })
         .finally(() => {
           if (!cancelled) setIsValidatingImageType(false)
@@ -650,7 +1504,7 @@ export default function Home() {
         const text = await res.text()
         if (!res.ok) return []
         try {
-          return JSON.parse(text) as { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }[]
+          return JSON.parse(text) as { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string; imageUrl?: string }[]
         } catch {
           return []
         }
@@ -674,7 +1528,16 @@ export default function Home() {
         const text = await res.text()
         if (!res.ok) return []
         try {
-          return JSON.parse(text) as { id: string; label: string; description: string }[]
+          return JSON.parse(text) as {
+            id: string
+            label: string
+            description: string
+            color?: string
+            material?: string
+            texture?: string
+            finish?: string
+            imageUrl?: string
+          }[]
         } catch {
           return []
         }
@@ -740,6 +1603,97 @@ export default function Home() {
     setFavoriteImages([])
   }
 
+  /** Convert any image URL (data:, blob:, https:) to a data URL so the detect-components API can use it. */
+  const toDataUrlForDetection = useCallback(async (url: string): Promise<string | null> => {
+    if (!url) return null
+    if (url.startsWith('data:')) return url
+    try {
+      const res = await fetch(url, { mode: 'cors' })
+      if (!res.ok) return null
+      const blob = await res.blob()
+      return new Promise<string | null>((resolve) => {
+        const reader = new FileReader()
+        reader.onloadend = () => (typeof reader.result === 'string' ? resolve(reader.result) : resolve(null))
+        reader.onerror = () => resolve(null)
+        reader.readAsDataURL(blob)
+      })
+    } catch {
+      return null
+    }
+  }, [])
+
+  /** Run component detection on the generated image and set detected components for the Customize panel. Accepts data URL, blob URL, or https URL (will convert to data URL). */
+  const runComponentDetection = useCallback(async (imageUrl: string) => {
+    if (!imageUrl) return
+    const dataUrl = imageUrl.startsWith('data:')
+      ? imageUrl
+      : await toDataUrlForDetection(imageUrl)
+    if (!dataUrl || !dataUrl.startsWith('data:')) return
+    setIsDetectingComponents(true)
+    fetch('/api/detect-components', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl }),
+    })
+      .then((res) => (res.ok ? res.json() : { components: [] }))
+      .then((data: { components?: string[] }) => {
+        const list = Array.isArray(data?.components) ? data.components : []
+        setDetectedCustomizationComponents(list)
+      })
+      .catch(() => setDetectedCustomizationComponents([]))
+      .finally(() => setIsDetectingComponents(false))
+  }, [toDataUrlForDetection])
+
+  /**
+   * Custom room components: seed the layout reference as the first preview so Edit / Add / Replace / Erase
+   * work immediately — no full-room style, palette, or AI generate pass required.
+   */
+  useEffect(() => {
+    if (configType !== 'internal' && configType !== 'external') return
+    if (configMode !== 'customization') return
+    if (wizardStep !== 4) return
+    if (layoutReferenceImageIndex == null) return
+    const layoutUrl = images[layoutReferenceImageIndex]
+    if (!layoutUrl) return
+    if (generatedImageOriginal != null || generatedImage != null) return
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const watermarkedUrl = await applyWatermarkToImage(layoutUrl)
+        if (cancelled) return
+        setGeneratedImage(watermarkedUrl)
+        setGeneratedImageOriginal(layoutUrl)
+        setShowWatermark(true)
+        setStyleFinalizeGatePassed(true)
+        setLastAppliedStylePaletteKey(stylePaletteKey(null, null))
+        setComparisonSliderKey((k) => k + 1)
+        runComponentDetection(watermarkedUrl.startsWith('data:') ? watermarkedUrl : layoutUrl)
+      } catch {
+        if (cancelled) return
+        setGeneratedImage(layoutUrl)
+        setGeneratedImageOriginal(layoutUrl)
+        setShowWatermark(false)
+        setStyleFinalizeGatePassed(true)
+        setLastAppliedStylePaletteKey(stylePaletteKey(null, null))
+        setComparisonSliderKey((k) => k + 1)
+        runComponentDetection(layoutUrl)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    configType,
+    configMode,
+    wizardStep,
+    layoutReferenceImageIndex,
+    images,
+    generatedImage,
+    generatedImageOriginal,
+    runComponentDetection,
+  ])
+
   /** Toggle favourite for the current image (heart on image). Add if not in list, remove if already favourited. */
   const toggleFavorite = (imageUrl: string | null) => {
     if (!imageUrl) return
@@ -747,6 +1701,34 @@ export default function Home() {
       prev.includes(imageUrl) ? prev.filter((u) => u !== imageUrl) : [...prev, imageUrl]
     )
   }
+
+  const handleShareGeneratedResult = useCallback(async () => {
+    const url = generatedImage
+    if (!url) return
+    try {
+      const res = await fetch(url)
+      const blob = await res.blob()
+      const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png'
+      const file = new File([blob], `room-configuration-${Date.now()}.png`, { type: mime })
+      if (typeof navigator !== 'undefined' && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'AI room configuration' })
+        return
+      }
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share({ title: 'AI room configuration', text: 'Room configuration preview' })
+        return
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return
+      console.warn(e)
+    }
+    try {
+      await navigator.clipboard.writeText(typeof window !== 'undefined' ? window.location.href : '')
+      alert('Page link copied. Use Download to save the image file.')
+    } catch {
+      alert('Use Download to save this image.')
+    }
+  }, [generatedImage])
 
   /**
    * Generate the room/external image using AI
@@ -761,20 +1743,22 @@ export default function Home() {
       setError('Please select configuration type (Internal or External) first.')
       return
     }
-    const required = configType === 'external' ? 3 : 4
+    const required = 4
     if (images.length < required) {
       setError(configType === 'internal'
         ? 'Please upload at least 4 images of the room.'
-        : 'Please upload at least 3 external images (front, side/back, compound).')
+        : 'Please upload at least 4 external images (front, side/back, compound).')
       return
     }
 
     // Validate configuration based on mode (purpose: style is sufficient; ref images/text optional)
     if (configMode === 'purpose') {
-      const hasRefImages = fullRoomReferenceImages.length > 0
+      const hasRefImages =
+        fullRoomReferenceImages.length > 0 || optionalReconfigureReferenceImages.length > 0
       const hasText = fullRoomText.trim().length > 0
+      const hasOptionalNotes = optionalReconfigureNotes.trim().length > 0
       const hasStyle = selectedStyle != null && selectedStyle.trim().length > 0
-      if (!hasRefImages && !hasText && !hasStyle) {
+      if (!hasRefImages && !hasText && !hasOptionalNotes && !hasStyle) {
         setError('Please select a design style, and optionally add a description or upload reference image(s).')
         return
       }
@@ -798,6 +1782,73 @@ export default function Home() {
       }
     }
 
+    if (configMode === 'customization') {
+      const eraseReady = Boolean(eraseRegionSelection && eraseRegionConfirmed)
+      const hasInternalPick = Object.values(customStyles).some((v) => v != null && v !== '')
+      const hasExternalPick =
+        configType === 'external' &&
+        EXTERNAL_CATEGORIES.some((cat) => externalCustomization[cat] != null && externalCustomization[cat] !== '')
+      const hasCustomizationSelectionInner = hasInternalPick || hasExternalPick || eraseReady
+      if (!hasCustomizationSelectionInner) {
+        if (eraseRegionSelection && !eraseRegionConfirmed) {
+          setError('Confirm your erase region: use the magnified preview and tap “Yes — this is the area to remove”.')
+        } else {
+          setError(
+            configType === 'external'
+              ? 'Please select at least one exterior category (facade, gate, etc.), or draw and confirm an area to erase on the image.'
+              : 'Please select at least one component style, or draw and confirm an area to erase on the image.'
+          )
+        }
+        return
+      }
+    }
+    if (configMode === 'purpose' && configType === 'internal') {
+      const hasCustomizationSelection = Object.values(customStyles).some((v) => v != null && v !== '')
+      const hasSelectedStyle = selectedStyle != null && selectedStyle.trim() !== ''
+      if (!hasSelectedStyle && !hasCustomizationSelection) {
+        setError('Please select a Style, or select at least one component (e.g. wall/floor tile) in Full Room mode.')
+        return
+      }
+    }
+    if (configMode === 'purpose' && configType === 'external') {
+      const hasSelectedStyle = selectedStyle != null && selectedStyle.trim() !== ''
+      const hasExternalCustomizationSelection = EXTERNAL_CATEGORIES.some(
+        (cat) => externalCustomization[cat] != null && externalCustomization[cat] !== ''
+      )
+      if (!hasSelectedStyle && !hasExternalCustomizationSelection) {
+        setError('Please select a Style, or select at least one external category (e.g. Facade/Gate) in Full External mode.')
+        return
+      }
+    }
+
+    // Guard against accidental automatic duplicate generations with unchanged inputs.
+    const requestKey = JSON.stringify({
+      configType,
+      configMode,
+      imageCount: images.length,
+      layoutReferenceImageIndex,
+      selectedStyle: selectedStyle ?? '',
+      selectedColorPalette: selectedColorPalette ?? '',
+      fullRoomText: fullRoomText.trim(),
+      fullRoomReferenceCount: fullRoomReferenceImages.length,
+      arrangementConfig,
+      componentReferenceCount: componentReferenceImages.length,
+      componentReferenceLabels: componentReferenceLabels.map((l) => l.trim()),
+      customStyles,
+      customActions,
+      externalCustomization,
+      eraseRegionSelection,
+      eraseRegionConfirmed,
+      hasCurrentResultImage: Boolean(generatedImageOriginal ?? generatedImage),
+    })
+    const nowTs = Date.now()
+    const lastReq = lastGenerationRequestRef.current
+    if (lastReq && lastReq.key === requestKey && nowTs - lastReq.at < DUPLICATE_GENERATION_WINDOW_MS) {
+      console.log('[Generate] Duplicate request ignored (same inputs within cooldown window).')
+      return
+    }
+    lastGenerationRequestRef.current = { key: requestKey, at: nowTs }
+
     setIsGenerating(true)
     setError(null)
     setWarning(null)
@@ -809,7 +1860,7 @@ export default function Home() {
         (cat) => externalCustomization[cat] != null && externalCustomization[cat] !== ''
       )
       const hasCustomization = hasInternalCustomization || hasExternalCustomization
-      // Style-only regeneration: user changed style/palette in Edit and clicked Regenerate — send current result so the new style is applied to this image (works for both Full Room and Arrangement modes)
+      // Style-only regeneration: user changed style/palette while customizing and clicked Regenerate — send current result so the new style is applied to this image (works for both Full Room and Arrangement modes)
       const hasStyleOrPalette = (selectedStyle != null && selectedStyle.trim() !== '') || (selectedColorPalette != null && selectedColorPalette.trim() !== '')
       const useCurrentResultForStyleRegenerate = hasStyleOrPalette && !!(generatedImageOriginal ?? generatedImage)
       // For comparison: show "before customization" vs "after customization"; set before to current result now
@@ -818,21 +1869,48 @@ export default function Home() {
       }
       // Build human-readable labels for each selected customization style so the AI gets
       // real descriptions instead of opaque IDs like "decor_plants_green".
-      const resolvedCustomizationLabels: Record<string, { label: string; description: string; isDecor: boolean }> = {}
+      const resolvedCustomizationLabels: Record<
+        string,
+        { label: string; description: string; isDecor: boolean; action?: CustomAction; referenceImageUrl?: string; seatingCapacity?: string }
+      > = {}
       if (configType !== 'external') {
         Object.entries(customStyles).forEach(([elementType, optionId]) => {
           if (!optionId) return
-          const elementKey = elementType as CustomElementType
-          // Check Supabase variations first, then fall back to CUSTOMIZATION_LIBRARY
-          const opts = productVariations[elementKey]?.length
-            ? productVariations[elementKey]!
-            : CUSTOMIZATION_LIBRARY[elementKey] ?? []
+          const action = customActions[elementType] ?? (elementType === 'decor' ? 'add' : 'edit')
+          if (optionId === '__erase__') {
+            resolvedCustomizationLabels[elementType] = {
+              label: 'Erase',
+              description: `Remove ${formatComponentLabel(elementType)} from the room while preserving layout and camera framing.`,
+              isDecor: false,
+              action: 'erase',
+            }
+            return
+          }
+          const opts = getOptionsForComponent(elementType, productVariations)
           const opt = opts.find((o) => o.id === optionId)
           if (opt) {
             resolvedCustomizationLabels[elementType] = {
               label: opt.label,
               description: opt.description,
-              isDecor: elementType === 'decor',
+              isDecor: action === 'add' || elementType === 'decor',
+              action,
+              ...(opt.imageUrl &&
+              (elementType === 'floor' ||
+                elementType === 'wall' ||
+                elementType === 'sofa' ||
+                elementType === 'mattress' ||
+                elementType === 'bed' ||
+                elementType === 'carpet' ||
+                elementType === 'rug')
+                ? { referenceImageUrl: opt.imageUrl }
+                : {}),
+              ...(elementType === 'sofa'
+                ? (() => {
+                    const cap =
+                      (opt as CustomizationOption).seating_capacity || inferSofaSeatingFromLabel(opt.label)
+                    return cap ? { seatingCapacity: cap } : {}
+                  })()
+                : {}),
             }
           }
         })
@@ -844,7 +1922,15 @@ export default function Home() {
         configMode,
         purposeInput: configMode === 'purpose' ? fullRoomText : undefined,
         fullRoomReferenceImages: configMode === 'purpose' ? fullRoomReferenceImages : undefined,
-        fullRoomAdditionalText: undefined,
+        fullRoomAdditionalText:
+          (configMode === 'purpose' || configMode === 'arrangement') && optionalReconfigureNotes.trim()
+            ? optionalReconfigureNotes.trim()
+            : undefined,
+        optionalReferenceImages:
+          (configMode === 'purpose' || configMode === 'arrangement') &&
+          optionalReconfigureReferenceImages.length > 0
+            ? optionalReconfigureReferenceImages
+            : undefined,
         arrangementConfig: configMode === 'arrangement' ? arrangementConfig : undefined,
         vastuEnabled: configType === 'external' ? false : vastuEnabled,
         componentReferenceImages: configMode === 'arrangement' ? componentReferenceImages : undefined,
@@ -855,21 +1941,19 @@ export default function Home() {
         selectedStyle: selectedStyle ?? undefined,
         selectedColorPalette: selectedColorPalette ?? undefined,
         layoutImageIndex: layoutReferenceImageIndex ?? 0,
-        // Send current result when applying component customizations OR when doing style/palette-only regeneration so the new style is applied to the current image
-        ...((hasCustomization || useCurrentResultForStyleRegenerate) && (generatedImageOriginal ?? generatedImage)
+        // Image-based erase: normalized rect (0–1). Backend will inpaint this region (only after user confirms preview).
+        ...(configType === 'internal' && eraseRegionSelection && eraseRegionConfirmed
+          ? { eraseRegion: eraseRegionSelection }
+          : {}),
+        // Send current result when applying component customizations, style-only regenerate, or image-based erase
+        ...((hasCustomization || useCurrentResultForStyleRegenerate || (eraseRegionSelection && eraseRegionConfirmed)) &&
+        (generatedImageOriginal ?? generatedImage)
           ? { currentResultImage: generatedImageOriginal ?? generatedImage }
           : {}),
       }
 
       // Call the API route
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      })
-
+      const response = await postJsonWithRetry('/api/generate', payload)
       const text = await response.text()
       let data: { error?: string; imageUrl?: string; warning?: string }
       try {
@@ -887,15 +1971,40 @@ export default function Home() {
       setGeneratedImageOriginal(imageUrl)
       setShowWatermark(true)
       const watermarkedUrl = await applyWatermarkToImage(imageUrl)
+      // Comparison view: replace the single "after" image (never append); slider shows before + this only
       setGeneratedImage(watermarkedUrl)
+      setComparisonSliderKey((k) => k + 1)
       setGenerationHistory((prev) => [watermarkedUrl, ...prev.slice(0, MAX_GENERATION_HISTORY - 1)])
+      setGenerationHistoryOriginal((prev) => [imageUrl, ...prev.slice(0, MAX_GENERATION_HISTORY - 1)])
+      // Clear image-based erase selection after successful apply so user can draw a new one if needed
+      if (eraseRegionSelection) {
+        setEraseRegionSelection(null)
+        setEraseRegionConfirmed(false)
+      }
+      // Run component extraction on the generated image so Customize shows base + detected components (shelf, table, chair, etc.)
+      runComponentDetection(watermarkedUrl.startsWith('data:') ? watermarkedUrl : imageUrl)
       // First generation (no customization): comparison left = layout reference
       if (!hasCustomization && images.length > 0) {
         const layoutIdx = layoutReferenceImageIndex ?? 0
         setComparisonBeforeImageUrl(images[layoutIdx])
       }
+      if (configType === 'internal' || configType === 'external') {
+        setLastAppliedStylePaletteKey(stylePaletteKey(selectedStyle, selectedColorPalette))
+        setStyleFinalizeGatePassed(false)
+        setShowStyleReviewPanel(false)
+        setShowDirectEditPanel(false)
+        setIsEditingStylePalette(false)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
+      // Failed requests can be retried immediately by user.
+      lastGenerationRequestRef.current = null
+      const msg =
+        err instanceof Error && err.name === 'AbortError'
+          ? 'Generation timed out or was interrupted. Check your connection and try again.'
+          : err instanceof Error
+            ? err.message
+            : 'An error occurred'
+      setError(msg)
     } finally {
       setIsGenerating(false)
     }
@@ -1021,13 +2130,7 @@ Important:
           : {}),
       }
 
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      })
+      const response = await postJsonWithRetry('/api/generate', payload)
 
       const text = await response.text()
       let data: { error?: string; imageUrl?: string; warning?: string }
@@ -1047,19 +2150,83 @@ Important:
       setShowWatermark(true)
       const watermarkedUrl = await applyWatermarkToImage(imageUrl)
       setGeneratedImage(watermarkedUrl)
+      setComparisonSliderKey((k) => k + 1)
       setGenerationHistory((prev) => [watermarkedUrl, ...prev.slice(0, MAX_GENERATION_HISTORY - 1)])
+      setGenerationHistoryOriginal((prev) => [imageUrl, ...prev.slice(0, MAX_GENERATION_HISTORY - 1)])
+      runComponentDetection(watermarkedUrl.startsWith('data:') ? watermarkedUrl : imageUrl)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
+      const msg =
+        err instanceof Error && err.name === 'AbortError'
+          ? 'Generation timed out or was interrupted. Check your connection and try again.'
+          : err instanceof Error
+            ? err.message
+            : 'An error occurred'
+      setError(msg)
     } finally {
       setIsGenerating(false)
     }
   }
 
+  // When user opens Customize and we have a generated image but no detected components yet, run extraction on the current image (e.g. retry after failure or late-open)
+  useEffect(() => {
+    if (isCustomizing && generatedImage && detectedCustomizationComponents.length === 0 && !isDetectingComponents) {
+      runComponentDetection(generatedImage)
+    }
+  }, [isCustomizing, generatedImage, detectedCustomizationComponents.length, isDetectingComponents, runComponentDetection])
+
+  /** Under-slider UI already shows Customize / Components — hide duplicate “Customize” panel from result-actions. */
+  useEffect(() => {
+    if (
+      (configType === 'internal' || configType === 'external') &&
+      configMode === 'customization'
+    ) {
+      setIsCustomizing(false)
+    }
+  }, [configType, configMode])
+
+  /** New or changed rectangle → require confirmation again */
+  useEffect(() => {
+    setEraseRegionConfirmed(false)
+  }, [eraseRegionSelection])
+
+  /** Rectangle erase and component erase are independent — don’t auto-open “Wall” while user is using the box tool */
+  useEffect(() => {
+    if (eraseRegionSelection) setComponentEraseAwaitingConfirm(null)
+  }, [eraseRegionSelection])
+
+  useEffect(() => {
+    if (generationHistory.length === 0) setShowGenerationHistoryPanel(false)
+  }, [generationHistory.length])
+
   // Check if generation button should be enabled (requires config type + enough images + mode requirements)
-  const hasEnoughImages = configType != null && images.length >= (configType === 'external' ? 3 : 4)
+  const hasEnoughImages = configType != null && images.length >= 4
   const imageTypeOk =
     configType === 'vastu' || imageTypeValidation === null || imageTypeValidation.valid
   const hasSelectedStyle = selectedStyle != null && selectedStyle.trim() !== ''
+  const eraseRegionReady = Boolean(eraseRegionSelection && eraseRegionConfirmed)
+  const hasCustomizationSelection =
+    Object.values(customStyles).some((v) => v != null && v !== '') || eraseRegionReady
+  const hasExternalCustomizationSelection =
+    configType === 'external' &&
+    EXTERNAL_CATEGORIES.some((cat) => externalCustomization[cat] != null && externalCustomization[cat] !== '')
+  const hasAnyComponentSelection = hasCustomizationSelection || hasExternalCustomizationSelection
+  const lockedLayoutImage =
+    layoutReferenceImageIndex != null && images[layoutReferenceImageIndex]
+      ? images[layoutReferenceImageIndex]
+      : (images[0] ?? null)
+  /** Must match API inpaint source: current result when refining, else layout (see /api/generate erase branch). */
+  const erasePaintImageSrc =
+    (generatedImageOriginal ?? generatedImage) ?? lockedLayoutImage ?? null
+  /** After at least one successful room image exists, component/erase controls live on the result card (not duplicated in Step 4A). */
+  const hasRoomGenerationResult = !!(generatedImageOriginal ?? generatedImage)
+
+  useRoomEditorImageSync({
+    selectedCustomAction,
+    generatedImage,
+    generatedImageOriginal,
+    lockedLayoutImage,
+  })
+
   // For purpose mode: style is required, reference images/text are optional (user can generate with just style)
   // For arrangement mode: style is required, plus component decisions and refs if adding new components
   const canGenerate =
@@ -1068,13 +2235,82 @@ Important:
     hasEnoughImages &&
     imageTypeOk &&
     layoutReferenceImageIndex != null &&
-    hasSelectedStyle &&
+    (configMode === 'customization'
+      ? true
+      : configMode === 'purpose'
+      ? (hasSelectedStyle || hasAnyComponentSelection)
+      : hasSelectedStyle) &&
     (configMode === 'purpose'
       ? true // Style is sufficient; reference images/text are optional
+      : configMode === 'customization'
+      ? hasCustomizationSelection || hasExternalCustomizationSelection
       : addNewComponents !== null &&
         (addNewComponents === false ||
           (componentReferenceImages.length > 0 &&
             componentReferenceLabels.some((l) => l && l.trim().length > 0))))
+
+  const styleReviewGateActive =
+    (configType === 'internal' || configType === 'external') &&
+    Boolean(generatedImage) &&
+    !isGenerating &&
+    !styleFinalizeGatePassed
+
+  /** Only enable Regenerate when something has actually changed since the last applied style/palette or customization. */
+  const stylePaletteKeyCurrent = stylePaletteKey(selectedStyle, selectedColorPalette)
+  const hasPendingStyleOrPaletteChange =
+    (configType === 'internal' || configType === 'external') &&
+    hasRoomGenerationResult &&
+    stylePaletteKeyCurrent !== lastAppliedStylePaletteKey
+  const canRegenerateWithChanges =
+    (configType === 'vastu'
+      ? true
+      : hasCustomizationSelection || hasExternalCustomizationSelection || hasPendingStyleOrPaletteChange) &&
+    canGenerate
+
+  const customizationFocusCompact =
+    (configType === 'internal' || configType === 'external') &&
+    configMode === 'customization' &&
+    styleFinalizeGatePassed &&
+    hasRoomGenerationResult
+  const hideCustomizationWizardSetup = customizationFocusCompact && !customizationSetupExpanded
+
+  const acceptStyleReviewAndUnlock = useCallback(() => {
+    setStyleFinalizeGatePassed(true)
+    setCustomizationSetupExpanded(false)
+    setShowStyleReviewPanel(false)
+    useRoomEditorStore.getState().setEditOptions({
+      selectedStyleId: selectedStyle ?? undefined,
+      selectedColorPaletteId: selectedColorPalette ?? undefined,
+    })
+  }, [selectedStyle, selectedColorPalette])
+
+  const finalizeStyleReviewFromPanel = useCallback(() => {
+    if (configType !== 'internal' && configType !== 'external') return
+    const key = stylePaletteKey(selectedStyle, selectedColorPalette)
+    if (key !== lastAppliedStylePaletteKey && !canGenerate) {
+      setError('Cannot regenerate: confirm layout image and required steps, then try again.')
+      return
+    }
+    // Do not auto-generate here; this button now only unlocks customization.
+    // Users must click Regenerate explicitly to create a new version with the updated style/palette.
+    setStyleFinalizeGatePassed(true)
+    setCustomizationSetupExpanded(false)
+    setShowStyleReviewPanel(false)
+    useRoomEditorStore.getState().setEditOptions({
+      selectedStyleId: selectedStyle ?? undefined,
+      selectedColorPaletteId: selectedColorPalette ?? undefined,
+    })
+  }, [configType, selectedStyle, selectedColorPalette, lastAppliedStylePaletteKey, canGenerate])
+
+  const handleGenerateTourVideo = useCallback(() => {
+    setTourStartSignal((s) => s + 1)
+    requestAnimationFrame(() => {
+      document.getElementById('room-immersive-tour-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    })
+  }, [])
 
   return (
     <div className="page-shell">
@@ -1101,11 +2337,15 @@ Important:
                 : '🧭 Vastu-based'}
             </span>
             <span className="status-pill">
-              Images: {images.length} / 6 (min {configType === 'external' ? 3 : 4})
+              Images: {images.length} / 6 (min 4)
             </span>
             {configType != null && configType !== 'vastu' && (
               <span className="status-pill">
-                Mode: {configMode === 'purpose' ? (configType === 'external' ? 'Full external' : 'Full room') : 'Component-based'}
+                Mode: {configMode === 'purpose'
+                  ? (configType === 'external' ? 'Full external' : 'Full room')
+                  : configMode === 'customization'
+                  ? 'Custom room components'
+                  : 'Component-based'}
               </span>
             )}
             {(configType === 'internal' || configType === 'external') && (
@@ -1247,11 +2487,16 @@ Important:
                 onImagesChange={handleImagesChange}
                 minImages={minImages}
                 maxImages={maxImages}
+                invalidImageIndices={
+                  (configType === 'internal' || configType === 'external') && imageTypeValidation && !imageTypeValidation.valid
+                    ? (imageTypeValidation.invalidImageIndices ?? [])
+                    : []
+                }
                 hintText={
                   configType === 'internal'
                     ? 'Upload 4–6 clear photos of the same room from different angles (front, back, left, right, diagonals). Avoid blurry or very dark images.'
                     : configType === 'external'
-                    ? 'Upload 3–6 images: front elevation, side/back views, and compound or open area. Clear daylight photos work best.'
+                    ? 'Upload 4–6 images: front elevation, side/back views, and compound or open area. Clear daylight photos work best.'
                     : 'Upload 4–6 clear photos of the same room from different angles. These images represent the existing room structure for Vastu analysis.'
                 }
               />
@@ -1325,7 +2570,17 @@ Important:
                       key={index}
                       type="button"
                       className={`layout-reference-card ${layoutReferenceImageIndex === index ? 'selected' : ''}`}
-                      onClick={() => setLayoutReferenceImageIndex(index)}
+                      onClick={() => {
+                        if (layoutReferenceImageIndex === index) return
+                        setLayoutReferenceImageIndex(index)
+                        if (configMode === 'customization') {
+                          setGeneratedImage(null)
+                          setGeneratedImageOriginal(null)
+                          setGenerationHistory([])
+                          setGenerationHistoryOriginal([])
+                          setComparisonBeforeImageUrl(null)
+                        }
+                      }}
                     >
                       <img src={src} alt={`Image ${index + 1}`} />
                       {layoutReferenceImageIndex === index && (
@@ -1358,7 +2613,52 @@ Important:
             {/* ========== STEP 4 PAGE: Configure, Generate, Result ========== */}
             {wizardStep === 4 && configType != null && (
               <>
-            <div className="wizard-nav wizard-nav-top">
+            {hideCustomizationWizardSetup && (
+              <div
+                className="card"
+                style={{
+                  padding: '0.65rem 1rem',
+                  marginBottom: '0.85rem',
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span style={{ fontSize: '0.88rem', color: '#475569' }}>
+                    Layout, mode, style steps, and the main generate card are hidden so you can focus on{' '}
+                    <strong>Components</strong> and tools under your preview.
+                  </span>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    style={{ fontSize: '0.82rem' }}
+                    onClick={() => setCustomizationSetupExpanded(true)}
+                  >
+                    Show layout &amp; setup
+                  </button>
+                </div>
+              </div>
+            )}
+            {!hideCustomizationWizardSetup && (
+              <>
+            <div
+              className="wizard-nav wizard-nav-top"
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
               <button
                 type="button"
                 className="button button-secondary"
@@ -1366,6 +2666,15 @@ Important:
               >
                 ← Back to layout reference
               </button>
+              {customizationFocusCompact && customizationSetupExpanded && (
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => setCustomizationSetupExpanded(false)}
+                >
+                  Hide layout &amp; setup
+                </button>
+              )}
             </div>
             {/* Layout locked indicator */}
             {layoutReferenceImageIndex != null && images[layoutReferenceImageIndex] && (
@@ -1391,6 +2700,8 @@ Important:
                 </button>
               </div>
             )}
+              </>
+            )}
             {/* Step 4: Configuration Mode or Vastu questionnaire */}
             {configType === 'vastu' ? (
               <div className="card">
@@ -1403,7 +2714,7 @@ Important:
                   onChange={setVastuPreferences}
                 />
               </div>
-            ) : (
+            ) : hideCustomizationWizardSetup ? null : (
               <>
                 {/* Step 3A/3B: Configuration Mode Selection */}
                 <div id="step-configuration" className="card">
@@ -1453,10 +2764,21 @@ Important:
                   />
                 )}
 
-                {/* Step 4: Reference Images (optional) - appears after style selection */}
+                {(configMode === 'purpose' || configMode === 'arrangement') && (
+                  <OptionalReconfigureHints
+                    notes={optionalReconfigureNotes}
+                    onNotesChange={setOptionalReconfigureNotes}
+                    referenceImages={optionalReconfigureReferenceImages}
+                    onReferenceImagesChange={setOptionalReconfigureReferenceImages}
+                    variant={configType === 'external' ? 'external' : 'internal'}
+                    disabled={isGenerating}
+                  />
+                )}
+
+                {/* Step 5: Reference images for new components (arrangement only) */}
                 {configMode === 'arrangement' && (
                   <div className="card">
-                    <div className="step-label">{configType === 'internal' ? '🏠 STEP 4A' : '🏡 STEP 4B'}</div>
+                    <div className="step-label">{configType === 'internal' ? '🏠 STEP 5A' : '🏡 STEP 5B'}</div>
                     <div className="step-title-row">
                       <h2>Reference Images for New Components</h2>
                     </div>
@@ -1474,46 +2796,261 @@ Important:
                   </div>
                 )}
 
-                {configMode === 'purpose' && (
+                {/* (Full Room / External configuration card removed as per latest request) */}
+                {configMode === 'customization' && configType === 'internal' && (
                   <div className="card">
-                    <div className="step-label">{configType === 'internal' ? '🏠 STEP 4A' : '🏡 STEP 4B'}</div>
+                    <div className="step-label">🏠 STEP 5A</div>
                     <div className="step-title-row">
-                      <h2>Reference Images & Preferences (Optional)</h2>
+                      <h2>Custom Room Components</h2>
                     </div>
-                    <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
-                      Optional: Upload reference images for additional style/layout guidance, or add a description below. Since you've already selected a style, you can skip this and generate directly, or add these for more customization.
-                    </p>
-                    <FullRoomReferenceUpload
-                      referenceImages={fullRoomReferenceImages}
-                      onChange={setFullRoomReferenceImages}
-                      maxImages={4}
-                    />
-                    <div className="form-group" style={{ marginTop: '1rem' }}>
-                      <label htmlFor="full-room-text" className="label">
-                        Add description or preferences (optional)
-                      </label>
-                      <textarea
-                        id="full-room-text"
-                        className="input"
-                        style={{ minHeight: '80px', resize: 'vertical' }}
-                        value={fullRoomText}
-                        onChange={(e) => setFullRoomText(e.target.value)}
-                        placeholder="e.g. Workspace for 15 members, warm lighting, plants near the window, desk by the wall..."
-                      />
+                    {hasRoomGenerationResult ? (
+                      <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
+                        <strong>Custom configuration</strong> skips room style and palette. Your layout photo is the starting image — use{' '}
+                        <strong>Edit</strong>, <strong>Add</strong>, <strong>Replace</strong>, and <strong>Erase</strong> under the preview. Optional: pick
+                        component looks here or in Step 6A and use <strong>Apply customization</strong> / <strong>Generate</strong>.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
+                          Select component styles below. Layout and camera stay unchanged.{' '}
+                          <strong>Use &quot;Apply customization&quot;</strong> under your selection summary, or <strong>&quot;Generate Room Configuration&quot;</strong> in Step 6A.
+                        </p>
+                        {lockedLayoutImage && (
+                          <div style={{ marginBottom: '0.9rem' }} id="step-5a-erase-anchor">
+                            {selectedCustomAction === 'erase' && erasePaintImageSrc ? (
+                              <>
+                                <p className="hint-text" style={{ marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+                                  Draw on your layout image to choose a rectangle to remove on <strong>first</strong> generation. After you have a result, region erase moves to the image below.
+                                </p>
+                                <EraseRegionSelector
+                                  imageSrc={erasePaintImageSrc}
+                                  value={eraseRegionSelection}
+                                  onChange={setEraseRegionSelection}
+                                />
+                                {eraseRegionSelection && erasePaintImageSrc ? (
+                                  <RegionEraseConfirmPanel
+                                    imageSrc={erasePaintImageSrc}
+                                    region={eraseRegionSelection}
+                                    confirmed={eraseRegionConfirmed}
+                                    onConfirm={() => setEraseRegionConfirmed(true)}
+                                    onRedraw={() => {
+                                      setEraseRegionSelection(null)
+                                      setEraseRegionConfirmed(false)
+                                    }}
+                                  />
+                                ) : null}
+                              </>
+                            ) : (
+                              <div
+                                style={{
+                                  position: 'relative',
+                                  borderRadius: '12px',
+                                  overflow: 'hidden',
+                                  border: '1px solid var(--color-border)',
+                                  background: '#000',
+                                }}
+                              >
+                                <img
+                                  src={lockedLayoutImage}
+                                  alt="Locked layout reference"
+                                  style={{ display: 'block', width: '100%', height: 'auto', objectFit: 'contain' }}
+                                />
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    left: '8px',
+                                    right: '8px',
+                                    bottom: '10px',
+                                    transform: 'none',
+                                    background: 'rgba(15, 23, 42, 0.75)',
+                                    backdropFilter: 'blur(3px)',
+                                    border: '1px solid rgba(255,255,255,0.2)',
+                                    borderRadius: '14px',
+                                    padding: '0.35rem 0.45rem',
+                                  }}
+                                >
+                                  <CustomizationModeActionButtons
+                                    selectedCustomAction={selectedCustomAction}
+                                    onSelect={handleCustomizationActionInStep4}
+                                    variant="overlay"
+                                    onGenerate360={handleGenerateTourVideo}
+                                    generate360Disabled={!hasRoomGenerationResult || styleReviewGateActive || isGenerating}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            {selectedCustomAction === 'erase' && (
+                              <div style={{ marginTop: '0.5rem' }}>
+                                <CustomizationModeActionButtons
+                                  selectedCustomAction={selectedCustomAction}
+                                  onSelect={handleCustomizationActionInStep4}
+                                  variant="overlay"
+                                  onGenerate360={handleGenerateTourVideo}
+                                  generate360Disabled={!hasRoomGenerationResult || styleReviewGateActive || isGenerating}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <InternalCustomizationPanel
+                          customizationComponentList={customizationComponentList}
+                          selectedElementType={selectedElementType}
+                          setSelectedElementType={setSelectedElementType}
+                          selectedCustomAction={selectedCustomAction}
+                          customStyles={customStyles}
+                          setCustomStyles={setCustomStyles}
+                          customActions={customActions}
+                          setCustomActions={setCustomActions}
+                          setCustomHistory={setCustomHistory}
+                          componentEraseAwaitingConfirm={componentEraseAwaitingConfirm}
+                          setComponentEraseAwaitingConfirm={setComponentEraseAwaitingConfirm}
+                          productVariations={productVariations}
+                          loadingVariations={loadingVariations}
+                          hasCustomizationSelection={hasCustomizationSelection}
+                          eraseRegionSelection={eraseRegionSelection}
+                          eraseRegionCommitted={eraseRegionConfirmed}
+                          resultPreviewImageUrl={null}
+                          selectIdSuffix="step4"
+                          onApplyCustomization={() => void handleGenerate()}
+                          applyCustomizationDisabled={!canGenerate || isGenerating || styleReviewGateActive}
+                          applyCustomizationPending={isGenerating}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {configMode === 'customization' && configType === 'external' && (
+                  <div className="card">
+                    <div className="step-label">🏡 STEP 5B</div>
+                    <div className="step-title-row">
+                      <h2>Custom exterior components</h2>
                     </div>
+                    {hasRoomGenerationResult ? (
+                      <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
+                        <strong>Custom configuration</strong> skips exterior style and palette. Your reference photo is the starting image — use{' '}
+                        <strong>Edit</strong>, <strong>Add</strong>, <strong>Replace</strong>, and <strong>Erase</strong> under the preview. Optional:
+                        exterior presets below or <strong>Generate External Configuration</strong> in Step 6B.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
+                          Choose facade, windows, entrance, and other exterior categories below. Layout and camera stay unchanged.{' '}
+                          <strong>Use &quot;Apply customization&quot;</strong> when ready, or <strong>Generate External Configuration</strong> in
+                          Step 6B.
+                        </p>
+                        {lockedLayoutImage && (
+                          <div style={{ marginBottom: '0.9rem' }} id="step-5b-external-erase-anchor">
+                            {selectedCustomAction === 'erase' && erasePaintImageSrc ? (
+                              <>
+                                <p className="hint-text" style={{ marginBottom: '0.5rem', fontSize: '0.85rem' }}>
+                                  Draw on your reference image to mark a rectangle to remove on <strong>first</strong> generation. After you have a
+                                  result, use erase on the generated image.
+                                </p>
+                                <EraseRegionSelector
+                                  imageSrc={erasePaintImageSrc}
+                                  value={eraseRegionSelection}
+                                  onChange={setEraseRegionSelection}
+                                />
+                                {eraseRegionSelection && erasePaintImageSrc ? (
+                                  <RegionEraseConfirmPanel
+                                    imageSrc={erasePaintImageSrc}
+                                    region={eraseRegionSelection}
+                                    confirmed={eraseRegionConfirmed}
+                                    onConfirm={() => setEraseRegionConfirmed(true)}
+                                    onRedraw={() => {
+                                      setEraseRegionSelection(null)
+                                      setEraseRegionConfirmed(false)
+                                    }}
+                                  />
+                                ) : null}
+                              </>
+                            ) : (
+                              <div
+                                style={{
+                                  position: 'relative',
+                                  borderRadius: '12px',
+                                  overflow: 'hidden',
+                                  border: '1px solid var(--color-border)',
+                                  background: '#000',
+                                }}
+                              >
+                                <img
+                                  src={lockedLayoutImage}
+                                  alt="Locked exterior reference"
+                                  style={{ display: 'block', width: '100%', height: 'auto', objectFit: 'contain' }}
+                                />
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    left: '8px',
+                                    right: '8px',
+                                    bottom: '10px',
+                                    transform: 'none',
+                                    background: 'rgba(15, 23, 42, 0.75)',
+                                    backdropFilter: 'blur(3px)',
+                                    border: '1px solid rgba(255,255,255,0.2)',
+                                    borderRadius: '14px',
+                                    padding: '0.35rem 0.45rem',
+                                  }}
+                                >
+                                  <CustomizationModeActionButtons
+                                    selectedCustomAction={selectedCustomAction}
+                                    onSelect={handleCustomizationActionInStep4}
+                                    variant="overlay"
+                                    onGenerate360={handleGenerateTourVideo}
+                                    generate360Disabled={!hasRoomGenerationResult || styleReviewGateActive || isGenerating}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            {selectedCustomAction === 'erase' && (
+                              <div style={{ marginTop: '0.5rem' }}>
+                                <CustomizationModeActionButtons
+                                  selectedCustomAction={selectedCustomAction}
+                                  onSelect={handleCustomizationActionInStep4}
+                                  variant="overlay"
+                                  onGenerate360={handleGenerateTourVideo}
+                                  generate360Disabled={!hasRoomGenerationResult || styleReviewGateActive || isGenerating}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <ExternalCustomizationPanel
+                          selectedExternalCategory={selectedExternalCategory}
+                          setSelectedExternalCategory={setSelectedExternalCategory}
+                          externalCustomization={externalCustomization}
+                          setExternalCustomization={setExternalCustomization}
+                          externalCustomHistory={externalCustomHistory}
+                          setExternalCustomHistory={setExternalCustomHistory}
+                          externalProductVariations={externalProductVariations}
+                          loadingExternalVariations={loadingExternalVariations}
+                          onApplyCustomization={() => void handleGenerate()}
+                          applyCustomizationDisabled={!canGenerate || isGenerating || styleReviewGateActive}
+                          applyCustomizationPending={isGenerating}
+                          eraseRegionSelection={eraseRegionSelection}
+                          eraseRegionCommitted={eraseRegionConfirmed}
+                        />
+                      </>
+                    )}
                   </div>
                 )}
               </>
             )}
 
-            {/* Step 5: Generate */}
+            {/* Generate — hidden in customization focus mode (apply from Components under preview) */}
+            {!(
+              hideCustomizationWizardSetup &&
+              (configType === 'internal' || configType === 'external')
+            ) && (
             <div className="card">
               <div className="step-label">
                 {configType === 'internal'
-                  ? '🏠 STEP 5A'
+                  ? '🏠 STEP 6A'
                   : configType === 'external'
-                  ? '🏡 STEP 5B'
-                  : '🧭 STEP 4C'}
+                  ? '🏡 STEP 6B'
+                  : '🧭 STEP 6C'}
               </div>
               <div className="step-title-row">
                 <h2>
@@ -1552,6 +3089,7 @@ Important:
                 </button>
               </div>
             </div>
+            )}
 
             {/* Loading state when generating: show image being customized (or layout reference on first run) + green bar */}
             {isGenerating && (
@@ -1589,112 +3127,493 @@ Important:
               </div>
             )}
 
-            {/* Result: only before/after comparison (output shown once) + action bar */}
+            {/* Result: before/after is default; optional erase tabs inside slider; direct customize (tools) opens separately */}
             {generatedImage && !isGenerating && (
-              <div className="card">
+              <div className="card" id="result-output-anchor">
+                {showDirectEditPanel ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={() => setShowDirectEditPanel(false)}
+                      >
+                        ← Back to before &amp; after
+                      </button>
+                    </div>
+                    {(configType === 'internal' || configType === 'external') && !styleFinalizeGatePassed ? (
+                      <div
+                        style={{
+                          padding: '2rem 1.5rem',
+                          textAlign: 'center',
+                          borderRadius: 12,
+                          border: '1px dashed #94a3b8',
+                          background: '#f8fafc',
+                          color: '#475569',
+                        }}
+                      >
+                        <p style={{ margin: '0 0 1rem', fontSize: '0.95rem', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto' }}>
+                          Finalize your style from the preview first (use the toolbar above the image). Then open <strong>Direct customize</strong> again.
+                        </p>
+                        <button type="button" className="button button-primary" onClick={() => setShowDirectEditPanel(false)}>
+                          Back to preview
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <RoomEditorWorkbench
+                          imageUrl={generatedImageOriginal ?? generatedImage}
+                          onApply={(url) => void applyRoomEditorResultToGeneration(url)}
+                        />
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <button
+                            type="button"
+                            className="button button-secondary"
+                            onClick={async () => {
+                              try {
+                                await downloadImageWithLogo(generatedImage, `room-configuration-${Date.now()}.png`)
+                              } catch (e) {
+                                console.error(e)
+                                alert('Failed to download image.')
+                              }
+                            }}
+                          >
+                            💾 Download image
+                          </button>
+                          <button type="button" className="button button-secondary" onClick={() => setShowDirectEditPanel(false)}>
+                            Back to before &amp; after
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                <>
+                {(configType === 'internal' || configType === 'external') &&
+                  styleFinalizeGatePassed &&
+                  !styleReviewGateActive && (
+                  <div style={{ marginBottom: '0.65rem', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => setShowDirectEditPanel(true)}
+                      style={{ fontSize: '0.85rem' }}
+                    >
+                      Customize (tools)
+                    </button>
+                  </div>
+                )}
+                {styleReviewGateActive && (
+                  <div
+                    style={{
+                      marginBottom: '1rem',
+                      padding: '1rem 1.15rem',
+                      borderRadius: 12,
+                      background: 'linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%)',
+                      border: '1px solid #99f6e4',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.04em',
+                        textTransform: 'uppercase',
+                        color: '#0d9488',
+                        marginBottom: '0.35rem',
+                      }}
+                    >
+                      Step 1 — Review result
+                    </div>
+                    <h3 style={{ fontSize: '1.02rem', margin: '0 0 0.35rem', color: '#0f766e' }}>Happy with this look?</h3>
+                    <p className="hint-text" style={{ marginBottom: 0, fontSize: '0.88rem', lineHeight: 1.45 }}>
+                      Use the <strong>toolbar above the preview</strong>: <strong>Finalize &amp; continue</strong>, <strong>Adjust style</strong>,{' '}
+                      <strong>Download</strong>, and more. After changing style in the side panel, tap <strong>Finalize style</strong> at the top of
+                      that panel.
+                    </p>
+                  </div>
+                )}
                 <div
                   style={{
                     display: 'flex',
+                    flexDirection: styleReviewGateActive ? 'column' : 'row',
                     gap: '1.5rem',
-                    alignItems: 'flex-start',
-                    flexWrap: 'wrap',
+                    alignItems: 'stretch',
+                    flexWrap: styleReviewGateActive ? 'nowrap' : 'wrap',
+                    width: '100%',
                   }}
                 >
-                  <div style={{ flex: '1 1 0', minWidth: '260px' }}>
-                    {/* Single output view: before vs after with draggable slider; heart on image to favourite */}
-                    {(images.length > 0 || comparisonBeforeImageUrl) && (
-                      <div className="before-after-section before-after-primary" style={{ position: 'relative' }}>
-                        <h3 className="before-after-heading">Compare before & after</h3>
-                        <p className="hint-text" style={{ marginBottom: '0.75rem' }}>
-                          {comparisonBeforeImageUrl != null && images.length > 0 && comparisonBeforeImageUrl !== images[layoutReferenceImageIndex ?? 0]
-                            ? 'Left: image before this customization. Right: result after customization. Drag the slider to compare.'
-                            : 'Your generated result is on the right. Drag the slider to see the difference from your layout reference.'}
-                        </p>
+                      <div
+                        style={{
+                          flex: styleReviewGateActive ? '0 0 auto' : '1 1 400px',
+                          minWidth: styleReviewGateActive ? '100%' : '260px',
+                          maxWidth: '100%',
+                          width: styleReviewGateActive ? '100%' : undefined,
+                          display: styleReviewGateActive && showStyleReviewPanel ? 'grid' : 'block',
+                          gridTemplateColumns:
+                            styleReviewGateActive && showStyleReviewPanel
+                              ? 'minmax(0, 1fr) minmax(280px, min(380px, 100%))'
+                              : undefined,
+                          gap: styleReviewGateActive && showStyleReviewPanel ? '1.25rem' : undefined,
+                          alignItems: 'start',
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                        {/* Single output view: before vs after with draggable slider; heart on image to favourite */}
+                        {(images.length > 0 || comparisonBeforeImageUrl) && (
+                          <div className="before-after-section before-after-primary" style={{ position: 'relative' }}>
+                        <h3 className="before-after-heading">Before &amp; after</h3>
+                        {(() => {
+                          /* generationHistory[0] = newest … history[length-1] = oldest (v1). Slider: previous version vs selected. */
+                          const layoutRefUrl =
+                            images.length > 0 ? images[layoutReferenceImageIndex ?? 0] : ''
+                          const historyIdx =
+                            generatedImage == null
+                              ? -1
+                              : generationHistory.findIndex((wm, i) => {
+                                  const orig = generationHistoryOriginal[i]
+                                  const disp = generatedImage
+                                  const co = generatedImageOriginal
+                                  if (disp != null && (wm === disp || orig === disp)) return true
+                                  if (co != null && (wm === co || orig === co)) return true
+                                  return false
+                                })
+                          const beforeFromVersionChain =
+                            historyIdx >= 0 && historyIdx < generationHistory.length - 1
+                              ? generationHistory[historyIdx + 1]
+                              : null
+                          /* v1 (oldest in history): always compare original layout → v1. Don’t use comparisonBeforeImageUrl (that may be a snapshot of v1 from when v2 was generated, so both sides match v1). */
+                          const isViewingOldestHistoryVersion =
+                            historyIdx >= 0 && historyIdx === generationHistory.length - 1
+                          const effectiveSliderBeforeUrl = beforeFromVersionChain
+                            ? beforeFromVersionChain
+                            : isViewingOldestHistoryVersion
+                              ? layoutRefUrl
+                              : (comparisonBeforeImageUrl ?? layoutRefUrl)
+                          const currentV =
+                            historyIdx >= 0 ? generationHistory.length - historyIdx : null
+                          let compareBeforeLabel = 'Before (layout reference)'
+                          let compareAfterLabel = 'After (generated)'
+                          if (beforeFromVersionChain != null && currentV != null) {
+                            compareBeforeLabel = `Before (v${currentV - 1})`
+                            compareAfterLabel = `After (v${currentV})`
+                          } else if (isViewingOldestHistoryVersion && currentV != null) {
+                            compareBeforeLabel = 'Before (layout reference)'
+                            compareAfterLabel = `After (v${currentV})`
+                          } else if (currentV != null) {
+                            compareAfterLabel = `After (v${currentV})`
+                            if (
+                              comparisonBeforeImageUrl != null &&
+                              layoutRefUrl &&
+                              comparisonBeforeImageUrl !== layoutRefUrl
+                            ) {
+                              compareBeforeLabel = 'Before (before customization)'
+                              compareAfterLabel = 'After (after customization)'
+                            }
+                          } else if (
+                            comparisonBeforeImageUrl != null &&
+                            layoutRefUrl &&
+                            comparisonBeforeImageUrl !== layoutRefUrl
+                          ) {
+                            compareBeforeLabel = 'Before (before customization)'
+                            compareAfterLabel = 'After (after customization)'
+                          }
+                          const styleLabel =
+                            selectedStyle && (configType === 'internal' || configType === 'external')
+                              ? selectedStyle.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+                              : undefined
+                          const paletteLabel =
+                            selectedColorPalette && (configType === 'internal' || configType === 'external')
+                              ? selectedColorPalette === 'surprise_me'
+                                ? 'Surprise Me'
+                                : selectedColorPalette.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+                              : undefined
+                          const previewToolbar =
+                            generatedImage != null ? (
+                              <ResultPreviewToolbar
+                                styleReviewGateActive={styleReviewGateActive}
+                                showStyleReviewPanel={showStyleReviewPanel}
+                                onFinalizeStyle={acceptStyleReviewAndUnlock}
+                                onToggleAdjustStyle={() => setShowStyleReviewPanel((v) => !v)}
+                                onRegenerate={() => {
+                                  if (configType === 'vastu') void handleGenerateVastu()
+                                  else void handleGenerate()
+                                }}
+                                regenerateDisabled={
+                                  configType === 'vastu'
+                                    ? isGenerating || images.length < 4 || layoutReferenceImageIndex == null
+                                    : !canRegenerateWithChanges || isGenerating
+                                }
+                                regeneratePending={isGenerating}
+                                styleLabel={styleLabel}
+                                paletteLabel={paletteLabel}
+                                onShare={() => void handleShareGeneratedResult()}
+                                shareDisabled={!generatedImage}
+                                onDownload={async () => {
+                                  if (!generatedImage) return
+                                  try {
+                                    await downloadImageWithLogo(
+                                      generatedImage,
+                                      `room-configuration-${Date.now()}.png`
+                                    )
+                                  } catch (e) {
+                                    console.error(e)
+                                    alert('Failed to download image.')
+                                  }
+                                }}
+                                downloadDisabled={!generatedImage}
+                                onToggleLike={() => toggleFavorite(generatedImage)}
+                                likeDisabled={!generatedImage}
+                                liked={favoriteImages.includes(generatedImage)}
+                                historyPanelOpen={showGenerationHistoryPanel}
+                                onHistory={() => {
+                                  if (generationHistory.length === 0) return
+                                  setShowGenerationHistoryPanel((open) => {
+                                    const next = !open
+                                    if (next) {
+                                      requestAnimationFrame(() =>
+                                        generationHistoryPanelRef.current?.scrollIntoView({
+                                          behavior: 'smooth',
+                                          block: 'nearest',
+                                        })
+                                      )
+                                    }
+                                    return next
+                                  })
+                                }}
+                                historyDisabled={generationHistory.length === 0}
+                                onStyle={() => {
+                                  if (styleReviewGateActive) setShowStyleReviewPanel(true)
+                                  else setIsEditingStylePalette(true)
+                                }}
+                                styleDisabled={!generatedImage || isGenerating}
+                                showStyleButton={configType === 'internal' || configType === 'external'}
+                              />
+                            ) : undefined
+                          return (
                         <BeforeAfterSlider
-                          beforeImageUrl={comparisonBeforeImageUrl ?? (images.length > 0 ? images[layoutReferenceImageIndex ?? 0] : '')}
+                          key={comparisonSliderKey}
+                          beforeImageUrl={effectiveSliderBeforeUrl}
                           afterImageUrl={generatedImage}
-                          beforeLabel={comparisonBeforeImageUrl != null && images.length > 0 && comparisonBeforeImageUrl !== images[layoutReferenceImageIndex ?? 0] ? 'Before (before customization)' : 'Before (layout reference)'}
-                          afterLabel={comparisonBeforeImageUrl != null && images.length > 0 && comparisonBeforeImageUrl !== images[layoutReferenceImageIndex ?? 0] ? 'After (after customization)' : 'After (generated)'}
+                          beforeLabel={compareBeforeLabel}
+                          afterLabel={compareAfterLabel}
+                          eraseOnResult={
+                            (configType === 'internal' || configType === 'external') &&
+                            !styleReviewGateActive &&
+                            selectedCustomAction !== 'add' &&
+                            selectedCustomAction !== 'replace' &&
+                            selectedCustomAction !== 'erase'
+                              ? {
+                                  value: eraseRegionSelection,
+                                  onChange: setEraseRegionSelection,
+                                  preferEraseTab: false,
+                                }
+                              : null
+                          }
+                          compareTopBar={previewToolbar}
                         />
-                        {generatedImage && (
-                          <button
-                            type="button"
-                            onClick={() => toggleFavorite(generatedImage)}
-                            aria-label={favoriteImages.includes(generatedImage) ? 'Remove from favourites' : 'Add to favourites'}
+                          )
+                        })()}
+                        {(configType === 'internal' || configType === 'external') &&
+                          !styleReviewGateActive &&
+                          selectedCustomAction === 'erase' &&
+                          eraseRegionSelection &&
+                          erasePaintImageSrc && (
+                            <RegionEraseConfirmPanel
+                              imageSrc={erasePaintImageSrc}
+                              region={eraseRegionSelection}
+                              confirmed={eraseRegionConfirmed}
+                              onConfirm={() => setEraseRegionConfirmed(true)}
+                              onRedraw={() => {
+                                setEraseRegionSelection(null)
+                                setEraseRegionConfirmed(false)
+                              }}
+                            />
+                          )}
+                        {(configType === 'internal' || configType === 'external') && !styleReviewGateActive && (
+                          <div
                             style={{
-                              position: 'absolute',
-                              top: '0.5rem',
-                              right: '0.5rem',
-                              width: '36px',
-                              height: '36px',
-                              borderRadius: '50%',
-                              border: 'none',
-                              background: 'rgba(255,255,255,0.9)',
-                              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontSize: '1.25rem',
-                              color: favoriteImages.includes(generatedImage) ? '#e11d48' : '#94a3b8',
-                              transition: 'color 0.2s, transform 0.15s',
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.transform = 'scale(1.08)'
-                              if (!favoriteImages.includes(generatedImage)) e.currentTarget.style.color = '#e11d48'
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.transform = 'scale(1)'
-                              if (!favoriteImages.includes(generatedImage)) e.currentTarget.style.color = '#94a3b8'
+                              marginTop: '0.75rem',
+                              paddingTop: '0.75rem',
+                              borderTop: '1px solid var(--color-border, #e2e8f0)',
                             }}
                           >
-                            {favoriteImages.includes(generatedImage) ? '♥' : '♡'}
-                          </button>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '0.75rem',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <CustomizationModeActionButtons
+                                selectedCustomAction={selectedCustomAction}
+                                onSelect={handleCustomizationActionFromResult}
+                                variant="bar"
+                                onGenerate360={handleGenerateTourVideo}
+                                generate360Disabled={!hasRoomGenerationResult || styleReviewGateActive || isGenerating}
+                              />
+                            </div>
+                            {(configType === 'internal' || configType === 'external') &&
+                              !styleReviewGateActive &&
+                              (selectedCustomAction === 'add' ||
+                                selectedCustomAction === 'replace' ||
+                                selectedCustomAction === 'erase') &&
+                              (generatedImageOriginal ?? generatedImage) && (
+                                <div
+                                  style={{
+                                    marginTop: '1rem',
+                                    padding: '1rem',
+                                    borderRadius: 12,
+                                    border: '1px solid var(--color-border, #e2e8f0)',
+                                    background: '#f8fafc',
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      flexWrap: 'wrap',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      gap: '0.75rem',
+                                      marginBottom: '0.75rem',
+                                    }}
+                                  >
+                                    <p className="hint-text" style={{ margin: 0, fontSize: '0.88rem', flex: '1 1 220px' }}>
+                                      Draw a <strong>box on the image</strong>, choose what to add in the <strong>options panel</strong>, click{' '}
+                                      <strong>Add</strong>, review the preview, then <strong>Apply</strong>.
+                                    </p>
+                                    <HistoryManager />
+                                  </div>
+                                  <div
+                                    className="generating-fixed-layout"
+                                    style={{
+                                      background: '#f1f5f9',
+                                      borderRadius: 12,
+                                    }}
+                                  >
+                                    <CanvasInteraction
+                                      imageSrc={
+                                        liftWorkingImage ??
+                                        (generatedImageOriginal ?? generatedImage) ??
+                                        ''
+                                      }
+                                      className="room-editor-canvas"
+                                      fullWidth
+                                    />
+                                  </div>
+                                  <div style={{ marginTop: '0.75rem' }}>
+                                    <SelectionModeToolbar />
+                                  </div>
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      flexWrap: 'wrap',
+                                      gap: '1.25rem',
+                                      alignItems: 'flex-start',
+                                      marginTop: '0.75rem',
+                                    }}
+                                  >
+                                    <div style={{ flex: '0 1 340px', width: '100%', maxWidth: 400 }}>
+                                      <SidePanel />
+                                    </div>
+                                    <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                      <PreviewPanel
+                                        onApply={async () => {
+                                          const img = useRoomEditorStore.getState().workingImage
+                                          if (img) await applyRoomEditorResultToGeneration(img)
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            {configType === 'internal' && configMode === 'customization' && (
+                              <div
+                                id="step-5a-erase-anchor"
+                                style={{
+                                  marginTop: '1rem',
+                                  paddingTop: '1rem',
+                                  borderTop: '1px solid var(--color-border, #e2e8f0)',
+                                }}
+                              >
+                                <InternalCustomizationPanel
+                                  customizationComponentList={customizationComponentList}
+                                  selectedElementType={selectedElementType}
+                                  setSelectedElementType={setSelectedElementType}
+                                  selectedCustomAction={selectedCustomAction}
+                                  customStyles={customStyles}
+                                  setCustomStyles={setCustomStyles}
+                                  customActions={customActions}
+                                  setCustomActions={setCustomActions}
+                                  setCustomHistory={setCustomHistory}
+                                  componentEraseAwaitingConfirm={componentEraseAwaitingConfirm}
+                                  setComponentEraseAwaitingConfirm={setComponentEraseAwaitingConfirm}
+                                  productVariations={productVariations}
+                                  loadingVariations={loadingVariations}
+                                  hasCustomizationSelection={hasCustomizationSelection}
+                                  eraseRegionSelection={eraseRegionSelection}
+                                  eraseRegionCommitted={eraseRegionConfirmed}
+                                  resultPreviewImageUrl={generatedImageOriginal ?? generatedImage}
+                                  selectIdSuffix="result"
+                                  sectionTitle="Components"
+                                  onApplyCustomization={() => void handleGenerate()}
+                                  applyCustomizationDisabled={!canGenerate || isGenerating || styleReviewGateActive}
+                                  applyCustomizationPending={isGenerating}
+                                />
+                              </div>
+                            )}
+                            {configType === 'external' && configMode === 'customization' && (
+                              <div
+                                id="step-5b-external-result-components-anchor"
+                                style={{
+                                  marginTop: '1rem',
+                                  paddingTop: '1rem',
+                                  borderTop: '1px solid var(--color-border, #e2e8f0)',
+                                }}
+                              >
+                                <ExternalCustomizationPanel
+                                  selectedExternalCategory={selectedExternalCategory}
+                                  setSelectedExternalCategory={setSelectedExternalCategory}
+                                  externalCustomization={externalCustomization}
+                                  setExternalCustomization={setExternalCustomization}
+                                  externalCustomHistory={externalCustomHistory}
+                                  setExternalCustomHistory={setExternalCustomHistory}
+                                  externalProductVariations={externalProductVariations}
+                                  loadingExternalVariations={loadingExternalVariations}
+                                  onApplyCustomization={() => void handleGenerate()}
+                                  applyCustomizationDisabled={!canGenerate || isGenerating || styleReviewGateActive}
+                                  applyCustomizationPending={isGenerating}
+                                  sectionTitle="Exterior components"
+                                  eraseRegionSelection={eraseRegionSelection}
+                                  eraseRegionCommitted={eraseRegionConfirmed}
+                                />
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
 
-                    {/* Action bar: Download, Restart, Customize, Edit (favourite = heart on image) */}
+                    {/* Action bar: watermark, restart, customize (download lives on the before/after preview) */}
                     <div className="result-actions">
-                      <button
-                        type="button"
-                        className="button button-secondary"
-                        onClick={async () => {
-                          try {
-                            await downloadImageWithLogo(
-                              generatedImage,
-                              `room-configuration-${Date.now()}.png`
-                            )
-                          } catch (e) {
-                            console.error(e)
-                            alert('Failed to download image.')
-                          }
-                        }}
-                        disabled={isGenerating}
-                      >
-                        💾 Download image
-                      </button>
                       {generatedImageOriginal != null && (
                         <button
                           type="button"
                           className="button button-secondary"
                           onClick={async () => {
-                            if (showWatermark) {
-                              setGeneratedImage(generatedImageOriginal)
-                              setShowWatermark(false)
-                            } else {
-                              try {
-                                const watermarkedUrl = await applyWatermarkToImage(generatedImageOriginal)
-                                setGeneratedImage(watermarkedUrl)
-                                setShowWatermark(true)
-                              } catch (e) {
-                                console.error(e)
-                              }
+                            try {
+                              const watermarkedUrl = await applyWatermarkToImage(generatedImageOriginal)
+                              setGeneratedImage(watermarkedUrl)
+                              setShowWatermark(true)
+                            } catch (e) {
+                              console.error(e)
                             }
                           }}
                           disabled={isGenerating}
                         >
-                          {showWatermark ? 'Remove watermark' : 'Add watermark'}
+                          {showWatermark ? 'Reapply watermark' : 'Apply watermark'}
                         </button>
                       )}
                       <button
@@ -1705,28 +3624,52 @@ Important:
                       >
                         Restart configuration
                       </button>
-                      <button
-                        type="button"
-                        className="button button-secondary"
-                        onClick={() => {
-                          if (!generatedImage) return
-                          setIsCustomizing((v) => {
-                            const next = !v
-                            if (next) {
-                              setCustomClickPosition(null)
-                              // Internal: default to Wall so user can select multiple components (wall, floor, ceiling, etc.) then Apply once
-                              if (configType === 'internal') setSelectedElementType('wall')
-                              else setSelectedElementType(null)
-                              if (configType === 'external') setSelectedExternalCategory('facade')
-                            }
-                            return next
-                          })
-                        }}
-                        disabled={isGenerating}
-                      >
-                        {isCustomizing ? 'Close Customize' : 'Customize'}
-                      </button>
-                      {(configType === 'internal' || configType === 'external') && (
+                      {!(
+                        (configType === 'internal' || configType === 'external') &&
+                        configMode === 'customization'
+                      ) && (
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={() => {
+                            if (!generatedImage) return
+                            setIsCustomizing((v) => {
+                              const next = !v
+                              if (next) {
+                                setCustomClickPosition(null)
+                                if (configType === 'internal') setSelectedElementType(customizationComponentList[0] ?? 'wall')
+                                else setSelectedElementType(null)
+                                if (configType === 'external') setSelectedExternalCategory('facade')
+                              }
+                              return next
+                            })
+                          }}
+                          disabled={isGenerating || styleReviewGateActive}
+                          title={styleReviewGateActive ? 'Finalize your style first' : undefined}
+                        >
+                          {isCustomizing ? 'Close Customize' : 'Customize'}
+                        </button>
+                      )}
+                      {(configType === 'internal' || configType === 'external') && (generatedImageOriginal ?? generatedImage) && (
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={() => {
+                            setTourStartSignal((s) => s + 1)
+                            requestAnimationFrame(() => {
+                              document.getElementById('room-immersive-tour-section')?.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'start',
+                              })
+                            })
+                          }}
+                          disabled={isGenerating || styleReviewGateActive}
+                          title={styleReviewGateActive ? 'Finalize your style first' : undefined}
+                        >
+                          🎥 Generate 360° video
+                        </button>
+                      )}
+                      {(configType === 'internal' || configType === 'external') && styleFinalizeGatePassed && (
                         <button
                           type="button"
                           className="button button-secondary"
@@ -1741,7 +3684,20 @@ Important:
                       )}
                     </div>
 
-                    {isEditingStylePalette && (configType === 'internal' || configType === 'external') && (
+                    {generatedImage &&
+                      !isGenerating &&
+                      !styleReviewGateActive &&
+                      (configType === 'vastu' || styleFinalizeGatePassed) && (
+                        <RoomImmersiveTourSection
+                          sectionId="room-immersive-tour-section"
+                          imageUrl={generatedImageOriginal ?? generatedImage}
+                          startSignal={tourStartSignal}
+                        />
+                      )}
+
+                    {isEditingStylePalette &&
+                      (configType === 'internal' || configType === 'external') &&
+                      styleFinalizeGatePassed && (
                       <div
                         style={{
                           marginTop: '1.25rem',
@@ -1852,54 +3808,24 @@ Important:
                                 <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>
                                   <strong>{EXTERNAL_CATEGORY_LABELS[selectedExternalCategory]} — from catalog</strong>
                                 </p>
-                                {loadingExternalVariations ? (
-                                  <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.6rem' }}>Loading variations from catalog…</p>
-                                ) : (
-                                <div
-                                  style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                                    gap: '0.5rem',
-                                    marginBottom: '0.6rem',
+                                <CustomizationStyleGrid
+                                  variant="compact"
+                                  options={
+                                    externalProductVariations[selectedExternalCategory]?.length
+                                      ? externalProductVariations[selectedExternalCategory]!
+                                      : EXTERNAL_CUSTOMIZATION_PRESETS[selectedExternalCategory]
+                                  }
+                                  value={externalCustomization[selectedExternalCategory] ?? ''}
+                                  onChange={(id) => {
+                                    setExternalCustomHistory((prev) => [...prev, { ...externalCustomization }])
+                                    setExternalCustomization((prev) => ({
+                                      ...prev,
+                                      [selectedExternalCategory]: id,
+                                    }))
                                   }}
-                                >
-                                  {(externalProductVariations[selectedExternalCategory]?.length
-                                    ? externalProductVariations[selectedExternalCategory]!
-                                    : EXTERNAL_CUSTOMIZATION_PRESETS[selectedExternalCategory]
-                                  ).map((opt) => (
-                                    <button
-                                      key={opt.id}
-                                      type="button"
-                                      className="button button-secondary"
-                                      style={{
-                                        textAlign: 'left',
-                                        padding: '0.5rem 0.6rem',
-                                        fontSize: '0.8rem',
-                                        background:
-                                          externalCustomization[selectedExternalCategory] === opt.id
-                                            ? 'rgba(16, 185, 129, 0.12)'
-                                            : undefined,
-                                        borderColor:
-                                          externalCustomization[selectedExternalCategory] === opt.id ? '#10b981' : undefined,
-                                      }}
-                                      onClick={() => {
-                                        setExternalCustomHistory((prev) => [...prev, { ...externalCustomization }])
-                                        setExternalCustomization((prev) => ({
-                                          ...prev,
-                                          [selectedExternalCategory]: opt.id,
-                                        }))
-                                      }}
-                                    >
-                                      <div style={{ fontWeight: 600 }}>{opt.label}</div>
-                                      {opt.description && (
-                                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.15rem' }}>
-                                          {opt.description}
-                                        </div>
-                                      )}
-                                    </button>
-                                  ))}
-                                </div>
-                                )}
+                                  loading={loadingExternalVariations}
+                                  emptyMessage="No catalog entries for this category."
+                                />
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem' }}>
                                   <button
                                     type="button"
@@ -1929,6 +3855,7 @@ Important:
                                         if (prev.length === 0) return prev
                                         const lastImage = prev[prev.length - 1]
                                         setGeneratedImage(lastImage)
+                                        setComparisonSliderKey((k) => k + 1)
                                         return prev.slice(0, prev.length - 1)
                                       })
                                     }}
@@ -1953,28 +3880,13 @@ Important:
                           /* Internal: component chips + material library (no image click required); single Apply all */
                           <>
                             <p style={{ fontSize: '0.85rem', color: '#4b5563', marginBottom: '0.5rem' }}>
-                              Select component types below (wall, floor, ceiling, door, etc.), pick a style for each, then click <strong>Apply all customizations</strong> once to regenerate the room with all selections.
+                              Select component types below (wall, floor, ceiling, etc.) and pick a style for each. <strong>No changes appear in the image until you click &quot;Generate room configuration&quot;</strong> below – that button applies all your selections at once.
                             </p>
-                            {/* Optional: click image to set focus point */}
-                            <div style={{ marginBottom: '0.75rem' }}>
-                              <p style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.35rem' }}>Optional: click image to set focus area for generation</p>
-                              <div
-                                role="button"
-                                tabIndex={0}
-                                onClick={(e) => {
-                                  const target = e.currentTarget.querySelector('img')
-                                  if (!target) return
-                                  const rect = target.getBoundingClientRect()
-                                  const x = (e.clientX - rect.left) / rect.width
-                                  const y = (e.clientY - rect.top) / rect.height
-                                  setCustomClickPosition({ x: Math.min(Math.max(x, 0), 1), y: Math.min(Math.max(y, 0), 1) })
-                                }}
-                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click() }}
-                                style={{ cursor: 'crosshair', display: 'inline-block', maxWidth: '240px', borderRadius: '8px', overflow: 'hidden', border: '2px solid var(--color-border)' }}
-                              >
-                                <img src={generatedImage} alt="Result – optional click to focus" style={{ display: 'block', width: '100%', height: 'auto', pointerEvents: 'none' }} />
-                              </div>
-                            </div>
+                            {isDetectingComponents && (
+                              <p style={{ fontSize: '0.8rem', color: '#2563eb', marginBottom: '0.5rem' }}>
+                                Detecting room components from the image…
+                              </p>
+                            )}
                             {/* Component type chips – always visible */}
                             <div
                               style={{
@@ -1984,7 +3896,7 @@ Important:
                                 marginBottom: '0.75rem',
                               }}
                             >
-                              {(Object.keys(CUSTOMIZATION_LIBRARY) as CustomElementType[]).map((type) => (
+                              {customizationComponentList.map((type) => (
                                 <button
                                   key={type}
                                   type="button"
@@ -1997,7 +3909,7 @@ Important:
                                   }}
                                   onClick={() => setSelectedElementType(type)}
                                 >
-                                  {type === 'glass-partition' ? 'Glass partition' : type.charAt(0).toUpperCase() + type.slice(1)}
+                                  {formatComponentLabel(type)}
                                 </button>
                               ))}
                             </div>
@@ -2005,77 +3917,31 @@ Important:
                               <>
                                 <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>
                                   <strong>
-                                    {selectedElementType === 'glass-partition' ? 'Glass partition' : selectedElementType.charAt(0).toUpperCase() + selectedElementType.slice(1)} – pick a style
+                                    {formatComponentLabel(selectedElementType)} – pick a look (tap a tile; image from catalog or colour if no photo)
                                   </strong>
                                 </p>
-                                {loadingVariations ? (
-                                  <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.6rem' }}>Loading variations from catalog…</p>
-                                ) : (
-                                <div style={{ marginBottom: '0.6rem', overflowX: 'auto' }}>
-                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#fff', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-                                    <thead>
-                                      <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Color</th>
-                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Style Name</th>
-                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Material</th>
-                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 600, color: '#475569' }}>Texture</th>
-                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'center', fontWeight: 600, color: '#475569' }}></th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {(productVariations[selectedElementType]?.length ? productVariations[selectedElementType]! : CUSTOMIZATION_LIBRARY[selectedElementType]).map((opt: { id: string; label: string; description: string; color?: string; material?: string; texture?: string; finish?: string }) => {
-                                        const materialRaw = (opt.material ?? '').trim()
-                                        const finish = (opt.finish ?? '').trim()
-                                        const genericMaterial = ['fabric', 'paint'].includes(materialRaw.toLowerCase())
-                                        const materialDisplay = genericMaterial
-                                          ? (finish || '—')
-                                          : [materialRaw, finish].filter(Boolean).join(', ') || '—'
-                                        const texture = opt.texture ?? '—'
-                                        const swatchHex = swatchHexFromOption(opt)
-                                        const isSelected = customStyles[selectedElementType] === opt.id
-                                        return (
-                                          <tr
-                                            key={opt.id}
-                                            style={{
-                                              borderBottom: '1px solid #f1f5f9',
-                                              background: isSelected ? 'rgba(16, 185, 129, 0.06)' : undefined,
-                                            }}
-                                          >
-                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
-                                              <div style={{ width: 48, height: 48, borderRadius: '6px', background: swatchHex, border: '1px solid #e2e8f0' }} title={String(opt.label)} />
-                                            </td>
-                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle' }}>
-                                              <div style={{ fontWeight: 600 }}>{String(opt.label)}</div>
-                                              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.1rem' }}>{String(opt.description)}</div>
-                                            </td>
-                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{materialDisplay}</td>
-                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', color: '#475569' }}>{texture}</td>
-                                            <td style={{ padding: '0.5rem 0.6rem', verticalAlign: 'middle', textAlign: 'center' }}>
-                                              <button
-                                                type="button"
-                                                className="button button-secondary"
-                                                style={{
-                                                  padding: '0.35rem 0.6rem',
-                                                  fontSize: '0.75rem',
-                                                  background: isSelected ? '#10b981' : '#2563eb',
-                                                  color: '#fff',
-                                                  border: 'none',
-                                                }}
-                                                onClick={() => {
-                                                  setCustomHistory((prev) => [...prev, { ...customStyles }])
-                                                  setCustomStyles((prev) => ({ ...prev, [selectedElementType]: opt.id }))
-                                                }}
-                                              >
-                                                Select
-                                              </button>
-                                            </td>
-                                          </tr>
-                                        )
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
-                                )}
+                                <CustomizationStyleGrid
+                                  variant={
+                                    selectedElementType === 'sofa' ||
+                                    selectedElementType === 'mattress' ||
+                                    selectedElementType === 'bed' ||
+                                    selectedElementType === 'carpet' ||
+                                    selectedElementType === 'rug'
+                                      ? 'large'
+                                      : 'compact'
+                                  }
+                                  options={getOptionsForComponent(selectedElementType, productVariations)}
+                                  value={customStyles[selectedElementType] ?? ''}
+                                  onChange={(id) => {
+                                    setCustomHistory((prev) => [...prev, { ...customStyles }])
+                                    if (id) {
+                                      setCustomActions((prev) => ({ ...prev, [selectedElementType]: selectedCustomAction }))
+                                    }
+                                    setCustomStyles((prev) => ({ ...prev, [selectedElementType]: id }))
+                                  }}
+                                  loading={loadingVariations}
+                                  emptyMessage="No styles loaded for this component yet. Supabase options can be added later."
+                                />
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
                                   <button
                                     type="button"
@@ -2086,7 +3952,7 @@ Important:
                                       setCustomStyles((prev) => ({ ...prev, [selectedElementType]: null }))
                                     }}
                                   >
-                                    Reset {selectedElementType}
+                                    Reset {formatComponentLabel(selectedElementType)}
                                   </button>
                                   <button
                                     type="button"
@@ -2103,6 +3969,7 @@ Important:
                                         if (prev.length === 0) return prev
                                         const lastImage = prev[prev.length - 1]
                                         setGeneratedImage(lastImage)
+                                        setComparisonSliderKey((k) => k + 1)
                                         return prev.slice(0, prev.length - 1)
                                       })
                                     }}
@@ -2113,34 +3980,36 @@ Important:
                               </>
                             )}
                             {/* Your selections summary */}
-                            {(Object.keys(customStyles) as CustomElementType[]).some((k) => customStyles[k] != null) && (
+                            {Object.keys(customStyles).some((k) => customStyles[k] != null) && (
                               <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.25)', fontSize: '0.85rem' }}>
                                 <strong style={{ color: '#0f766e' }}>Your selections</strong>
                                 <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.2rem', color: '#134e4a' }}>
-                                  {(Object.keys(customStyles) as CustomElementType[]).map((type) => {
+                                  {Object.keys(customStyles).map((type) => {
                                     const id = customStyles[type]
                                     if (id == null) return null
-                                    const opts = productVariations[type]?.length ? productVariations[type]! : CUSTOMIZATION_LIBRARY[type]
-                                    const label = opts?.find((o: { id: string }) => o.id === id)?.label ?? id
-                                    const typeLabel = type === 'glass-partition' ? 'Glass partition' : type.charAt(0).toUpperCase() + type.slice(1)
+                                    const opts = getOptionsForComponent(type, productVariations)
+                                    const label = opts.find((o) => o.id === id)?.label ?? id
                                     return (
                                       <li key={type}>
-                                        {typeLabel}: {label}
+                                        {formatComponentLabel(type)}: {label}
                                       </li>
                                     )
                                   })}
                                 </ul>
                               </div>
                             )}
-                            {/* Single Apply all customizations button */}
+                            {/* Single button: only this applies customizations to the image */}
                             <div style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                              <p className="hint-text" style={{ marginBottom: '0.5rem', fontSize: '0.8rem' }}>
+                                Changes in the image happen only when you click the button below.
+                              </p>
                               <button
                                 type="button"
                                 className="button"
                                 disabled={isGenerating}
                                 style={{
                                   padding: '0.55rem 1.1rem',
-                                  background: (Object.keys(customStyles) as CustomElementType[]).some((k) => customStyles[k] != null) ? '#0d9488' : '#94a3b8',
+                                  background: Object.keys(customStyles).some((k) => customStyles[k] != null) ? '#0d9488' : '#94a3b8',
                                   color: '#fff',
                                   border: 'none',
                                   borderRadius: '6px',
@@ -2155,10 +4024,10 @@ Important:
                                 {isGenerating ? (
                                   <>
                                     <span className="spinner" aria-hidden style={{ marginRight: '0.35rem' }} />
-                                    Applying…
+                                    Generating…
                                   </>
                                 ) : (
-                                  'Apply all customizations'
+                                  'Generate room configuration'
                                 )}
                               </button>
                             </div>
@@ -2166,14 +4035,112 @@ Important:
                         )}
                       </div>
                     )}
+                        </div>
+                        {styleReviewGateActive && showStyleReviewPanel && (
+                          <aside className="style-review-panel" role="dialog" aria-label="Edit style and color palette">
+                            <div
+                              className="style-review-panel__header"
+                            >
+                              <div className="style-review-panel__heading-row">
+                                <div
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    letterSpacing: '0.04em',
+                                    textTransform: 'uppercase',
+                                    color: '#64748b',
+                                    marginBottom: '0.25rem',
+                                  }}
+                                >
+                                  Step 2 — Adjust look (optional)
+                                </div>
+                                <button
+                                  type="button"
+                                  className="button button-secondary style-review-panel__close"
+                                  aria-label="Close style and palette panel"
+                                  onClick={() => setShowStyleReviewPanel(false)}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  gap: '0.6rem',
+                                }}
+                              >
+                                <h3 style={{ fontSize: '0.95rem', margin: 0, color: '#0f172a' }}>Style &amp; color</h3>
+                              </div>
+                              <p className="hint-text" style={{ marginBottom: '0.75rem', fontSize: '0.8rem', lineHeight: 1.4 }}>
+                                Scroll to pick style and palette. Actions stay visible here — no need to scroll down for buttons.
+                              </p>
+                            </div>
+                            <div
+                              className="style-review-panel__body"
+                              style={{
+                                flex: 1,
+                                minHeight: 0,
+                                overflowY: 'auto',
+                                padding: '0.75rem 1rem 1rem',
+                                WebkitOverflowScrolling: 'touch',
+                              }}
+                            >
+                              <StyleSelector
+                                selectedStyle={selectedStyle}
+                                onSelect={setSelectedStyle}
+                                variant={configType === 'external' ? 'external' : 'internal'}
+                                stepLabel="Style"
+                                compact
+                              />
+                              <ColorPaletteSelector
+                                selectedPalette={selectedColorPalette}
+                                onSelect={setSelectedColorPalette}
+                                variant={configType === 'external' ? 'external' : 'internal'}
+                                disabled={isGenerating}
+                                compact
+                              />
+                            </div>
+                            <div className="style-review-panel__actions">
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                                <button
+                                  type="button"
+                                  className="button button-primary"
+                                  disabled={isGenerating}
+                                  style={{ width: '100%', justifyContent: 'center' }}
+                                  onClick={() => void finalizeStyleReviewFromPanel()}
+                                >
+                                  {isGenerating ? (
+                                    <>
+                                      <span className="spinner" aria-hidden />
+                                      Generating…
+                                    </>
+                                  ) : (
+                                    'Finalize style'
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="button button-secondary"
+                                  style={{ width: '100%', justifyContent: 'center' }}
+                                  onClick={() => setShowStyleReviewPanel(false)}
+                                >
+                                  Close without changes
+                                </button>
+                              </div>
+                            </div>
+                          </aside>
+                        )}
                   </div>
 
                   {/* Vastu explanation column (for Vastu-based or Vastu-enabled internal configs) */}
                   {(configType === 'vastu' || (configType === 'internal' && vastuEnabled)) && (
                     <div
                       style={{
-                        flex: '0 0 260px',
-                        maxWidth: '320px',
+                        flex: styleReviewGateActive ? '0 0 auto' : '0 0 260px',
+                        maxWidth: styleReviewGateActive ? '100%' : '320px',
+                        width: styleReviewGateActive ? '100%' : undefined,
                         display: 'flex',
                         flexDirection: 'column',
                         gap: '0.75rem',
@@ -2231,12 +4198,16 @@ Important:
                     </div>
                   )}
 
-                  {generationHistory.length > 0 && (
+                  {generationHistory.length > 0 && showGenerationHistoryPanel && (
                     <div
-                      className="card"
+                      ref={generationHistoryPanelRef}
+                      className="card generation-history-panel"
                       style={{
-                        flex: '0 0 240px',
-                        maxWidth: '280px',
+                        flex: styleReviewGateActive ? '0 0 auto' : '0 0 280px',
+                        minWidth: '220px',
+                        maxWidth: '100%',
+                        width: styleReviewGateActive ? '100%' : undefined,
+                        alignSelf: styleReviewGateActive ? 'stretch' : undefined,
                         display: 'flex',
                         flexDirection: 'column',
                         padding: '1rem',
@@ -2259,6 +4230,12 @@ Important:
                       </div>
                       <p className="hint-text" style={{ marginBottom: '0.75rem', fontSize: '0.8rem', lineHeight: 1.35 }}>
                         First generated is V1. Click a version to load it; ♡ to mark as favourite.
+                        {styleReviewGateActive ? (
+                          <>
+                            {' '}
+                            <strong>Note:</strong> switching versions asks you to review style again before customizing.
+                          </>
+                        ) : null}
                       </p>
                       <div
                         style={{
@@ -2270,15 +4247,35 @@ Important:
                           paddingRight: '2px',
                         }}
                       >
-                        {[...generationHistory].reverse().map((url, index) => {
+                        {(() => {
+                          const selectedHistoryIdx =
+                            generatedImage == null
+                              ? -1
+                              : generationHistory.findIndex((wm, i) => {
+                                  const orig = generationHistoryOriginal[i]
+                                  const disp = generatedImage
+                                  const co = generatedImageOriginal
+                                  if (disp != null && (wm === disp || orig === disp)) return true
+                                  if (co != null && (wm === co || orig === co)) return true
+                                  return false
+                                })
+                          return [...generationHistory].reverse().map((url, index) => {
                           const versionNumber = index + 1
-                          const isCurrent = generatedImage === url
                           const originalIndex = generationHistory.length - 1 - index
+                          const isCurrent = originalIndex === selectedHistoryIdx
                           return (
                             <button
                               key={`history-${originalIndex}-${url.slice(0, 30)}`}
                               type="button"
-                              onClick={() => setGeneratedImage(url)}
+                              onClick={() => {
+                                setGeneratedImage(url)
+                                setComparisonSliderKey((k) => k + 1)
+                                if (configType === 'internal' || configType === 'external') {
+                                  setStyleFinalizeGatePassed(false)
+                                  setShowStyleReviewPanel(false)
+                                  setShowDirectEditPanel(false)
+                                }
+                              }}
                               aria-pressed={isCurrent}
                               aria-label={`Version ${versionNumber}${isCurrent ? ' (current)' : ''}`}
                               style={{
@@ -2378,13 +4375,18 @@ Important:
                               </div>
                             </button>
                           )
-                        })}
+                        })
+                        })()}
                       </div>
                       <button
                         type="button"
                         className="button button-secondary"
                         style={{ marginTop: '0.75rem', fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
-                        onClick={() => setGenerationHistory([])}
+                        onClick={() => {
+                          setGenerationHistory([])
+                          setGenerationHistoryOriginal([])
+                          setShowGenerationHistoryPanel(false)
+                        }}
                       >
                         Clear history
                       </button>
@@ -2392,6 +4394,8 @@ Important:
                   )}
 
                 </div>
+                </>
+                )}
               </div>
             )}
             </>
@@ -2414,7 +4418,7 @@ Important:
                   </li>
                   <li>
                     <span className="side-panel-dot" />
-                    <span><strong>External:</strong> Front elevation, side/back views, compound or open area (min 3).</span>
+                    <span><strong>External:</strong> Front elevation, side/back views, compound or open area (min 4).</span>
                   </li>
                   <li>
                     <span className="side-panel-dot" />
@@ -2445,6 +4449,32 @@ Important:
           </aside>
         </div>
       </div>
+
+      {(configType === 'internal' || configType === 'external') && hasRoomGenerationResult && (
+        <button
+          type="button"
+          className="button button-secondary"
+          data-testid="floating-generate-video-button"
+          onClick={handleGenerateTourVideo}
+          disabled={isGenerating || styleReviewGateActive}
+          title={styleReviewGateActive ? 'Finalize your style first' : 'Generate a 360° room tour video'}
+          style={{
+            position: 'fixed',
+            right: '1.75rem',
+            bottom: '1.75rem',
+            borderRadius: '999px',
+            padding: '0.6rem 1.1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            boxShadow: '0 10px 25px rgba(15,23,42,0.45)',
+            zIndex: 40,
+          }}
+        >
+          <span style={{ fontSize: '1.1rem' }}>🎥</span>
+          <span style={{ fontWeight: 600 }}>360° Video</span>
+        </button>
+      )}
     </div>
   )
 }

@@ -16,7 +16,10 @@
 /build
 
 # misc
+PROJECT_OVERVIEW.html
 .DS_Store
+scripts/tmp_ikea_paste.txt
+scripts/_catalog_extracted.txt
 *.pem
 
 # debug

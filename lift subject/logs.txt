@@ -1,0 +1,10 @@
+src/editor/CanvasArea.tsx(8,3): error TS6133: 'detectRoomComponents' is declared but its value is never read.
+src/editor/CanvasArea.tsx(60,9): error TS6133: 'clearSelectionArtifacts' is declared but its value is never read.
+src/editor/CanvasArea.tsx(318,13): error TS2322: Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+  Type 'null' is not assignable to type 'string | undefined'.
+src/editor/EditorTabs.tsx(5,1): error TS6133: 'ActivePanel' is declared but its value is never read.
+src/lib/canvasUtils.ts(1428,3): error TS6133: 'objectPrompt' is declared but its value is never read.
+src/lib/segmentation.ts(44,9): error TS6133: 'sr' is declared but its value is never read.
+src/lib/segmentation.ts(45,9): error TS6133: 'sg' is declared but its value is never read.
+src/lib/segmentation.ts(46,9): error TS6133: 'sb' is declared but its value is never read.
+src/lib/segmentation.ts(171,9): error TS6133: 'size' is declared but its value is never read.

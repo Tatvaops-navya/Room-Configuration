@@ -170,6 +170,8 @@ interface StyleSelectorProps {
   stepLabel?: string
   /** Optional disabled state */
   disabled?: boolean
+  /** Compact layout for side panels: 4 columns, smaller thumbnails */
+  compact?: boolean
 }
 
 export default function StyleSelector({
@@ -178,57 +180,66 @@ export default function StyleSelector({
   variant = 'internal',
   stepLabel,
   disabled = false,
+  compact = false,
 }: StyleSelectorProps) {
   const step = stepLabel ?? (variant === 'external' ? '🏡 STEP 3C' : '🏠 STEP 3B')
 
   return (
-    <div className="card">
-      <div className="step-label">{step}</div>
-      <div className="step-title-row">
-        <h2>Style Selection</h2>
-      </div>
-      <p className="hint-text" style={{ marginBottom: '1rem' }}>
-        Choose a design style. The AI will apply this style to your {variant === 'external' ? 'exterior' : 'room'} with photorealistic rendering.
-        {selectedStyle && (
-          <span style={{ display: 'block', marginTop: '0.5rem', color: '#10b981', fontWeight: 500 }}>
-            ✓ Style selected: {selectedStyle.charAt(0).toUpperCase() + selectedStyle.slice(1)}. You can proceed directly to generate, or optionally add reference images below.
-          </span>
-        )}
-      </p>
+    <div className={compact ? '' : 'card'} style={compact ? { marginBottom: '1rem' } : undefined}>
+      {!compact && <div className="step-label">{step}</div>}
+      {!compact && (
+        <div className="step-title-row">
+          <h2>Style Selection</h2>
+        </div>
+      )}
+      {compact ? (
+        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Style</label>
+      ) : (
+        <p className="hint-text" style={{ marginBottom: '1rem' }}>
+          Choose a design style. The AI will apply this style to your {variant === 'external' ? 'exterior' : 'room'} with photorealistic rendering.
+          {selectedStyle && (
+            <span style={{ display: 'block', marginTop: '0.5rem', color: '#10b981', fontWeight: 500 }}>
+              ✓ Style selected: {selectedStyle.charAt(0).toUpperCase() + selectedStyle.slice(1)}. You can proceed directly to generate, or optionally add reference images below.
+            </span>
+          )}
+        </p>
+      )}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-          gap: '0.9rem',
+          gridTemplateColumns: compact ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(120px, 1fr))',
+          gap: compact ? '0.5rem' : '0.9rem',
           alignItems: 'start',
         }}
       >
         {STYLE_OPTIONS.map((style) => {
           const isSelected = selectedStyle === style.id
+          const size = compact ? 56 : 92
           return (
             <button
               key={style.id}
               type="button"
-              className="button button-secondary"
+              aria-pressed={isSelected}
+              className={`button button-secondary selection-highlight ${isSelected ? 'is-selected' : ''}`}
               disabled={disabled}
               onClick={() => onSelect(style.id)}
               style={{
-                padding: '0.75rem 0.5rem',
+                padding: compact ? '0.4rem 0.3rem' : '0.75rem 0.5rem',
                 textAlign: 'center',
-                borderRadius: '12px',
-                border: isSelected ? '2px solid var(--color-primary, #3b82f6)' : '1px solid #e2e8f0',
-                background: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'white',
+                borderRadius: compact ? 8 : 12,
+                border: isSelected ? '2px solid var(--color-primary, #0d9488)' : '1px solid #e2e8f0',
+                background: isSelected ? 'rgba(13, 148, 136, 0.12)' : 'white',
               }}
             >
               <div
                 style={{
-                  width: '92px',
-                  height: '92px',
+                  width: size,
+                  height: size,
                   borderRadius: '999px',
                   overflow: 'hidden',
-                  margin: '0 auto 0.55rem',
-                  border: isSelected ? '3px solid rgba(59, 130, 246, 0.45)' : '1px solid #e2e8f0',
-                  boxShadow: isSelected ? '0 8px 22px rgba(59, 130, 246, 0.18)' : 'none',
+                  margin: '0 auto 0.35rem',
+                  border: isSelected ? '2px solid rgba(13, 148, 136, 0.6)' : '1px solid #e2e8f0',
+                  boxShadow: isSelected ? '0 4px 12px rgba(13, 148, 136, 0.2)' : 'none',
                 }}
               >
                 <img
@@ -241,7 +252,7 @@ export default function StyleSelector({
                   }}
                 />
               </div>
-              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#0f172a' }}>
+              <div style={{ fontWeight: 600, fontSize: compact ? '0.7rem' : '0.95rem', color: '#0f172a' }}>
                 {style.name}
               </div>
             </button>

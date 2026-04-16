@@ -21,10 +21,21 @@ interface ImageUploadProps {
   title?: string
   /** Optional hint text below title */
   hintText?: string
+  /** Optional invalid image indices for visual highlighting */
+  invalidImageIndices?: number[]
 }
 
-export default function ImageUpload({ images, onImagesChange, minImages, maxImages, title, hintText }: ImageUploadProps) {
+export default function ImageUpload({
+  images,
+  onImagesChange,
+  minImages,
+  maxImages,
+  title,
+  hintText,
+  invalidImageIndices = [],
+}: ImageUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const invalidSet = new Set(invalidImageIndices)
 
   /**
    * Handle file selection – compresses large images so payloads stay within API limits
@@ -109,8 +120,30 @@ export default function ImageUpload({ images, onImagesChange, minImages, maxImag
       {images.length > 0 && (
         <div className="image-preview-grid">
           {images.map((image, index) => (
-            <div key={index} className="image-preview">
+            <div
+              key={index}
+              className="image-preview"
+              style={invalidSet.has(index) ? { border: '2px solid #ef4444', borderRadius: '8px' } : undefined}
+            >
               <img src={image} alt={`Room image ${index + 1}`} />
+              {invalidSet.has(index) && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '6px',
+                    left: '6px',
+                    background: 'rgba(239, 68, 68, 0.9)',
+                    color: '#fff',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    padding: '0.2rem 0.4rem',
+                    borderRadius: '4px',
+                    zIndex: 2,
+                  }}
+                >
+                  Invalid
+                </div>
+              )}
               <button
                 className="remove-btn"
                 onClick={() => handleRemoveImage(index)}

@@ -1,25 +1,29 @@
 /**
- * Composites the company logo onto the generated image: repeated diagonal watermarks
- * across the image (like reference) plus a small logo in the bottom-right corner.
- * Triggers download. If the logo fails to load, uses text watermarks only.
+ * Display (`applyWatermarkToImage`): diagonal "TatvaOps" text only — no corner logo in the UI.
+ * Download (`downloadImageWithLogo`): same pixels plus bottom-right logo (`/tatva-ops-logo.png` or SVG/text fallback).
+ * Official PNG uses a black background — removed via makeBlackTransparent before compositing.
  */
 
-const LOGO_PATH = '/tatva-ops-logo.png'
+const LOGO_PATH_PNG = '/tatva-ops-logo.png'
+const LOGO_PATH_SVG = '/tatva-ops-logo.svg'
 const WATERMARK_TEXT = 'TatvaOps'
-const WATERMARK_OPACITY = 0.2            // intensity of watermark (lower = more subtle)
-const WATERMARK_ANGLE_DEG = -35         // diagonal
-const WATERMARK_FONT_SIZE_RATIO = 0.07  // ~7% of min dimension
-const WATERMARK_SPACING_X_RATIO = 0.52  // horizontal spacing (larger = more spread out)
-const WATERMARK_SPACING_Y_RATIO = 0.44  // vertical spacing (larger = more spread out)
-const LOGO_MAX_WIDTH_RATIO = 0.22
-const LOGO_MAX_HEIGHT_RATIO = 0.14
-const LOGO_MIN_SIZE = 80
-const PADDING_RATIO = 0.025
-const BLACK_THRESHOLD = 45
+const WATERMARK_OPACITY = 0.32
+const WATERMARK_ANGLE_DEG = -35
+const WATERMARK_FONT_SIZE_RATIO = 0.06
+const WATERMARK_SPACING_X_RATIO = 0.68
+const WATERMARK_SPACING_Y_RATIO = 0.58
+/** Horizontal wordmark + icon — allow wider footprint, limit height so it stays a corner badge */
+const LOGO_MAX_WIDTH_RATIO = 0.38
+const LOGO_MAX_HEIGHT_RATIO = 0.1
+const LOGO_MIN_SIZE = 64
+const PADDING_RATIO = 0.028
+/** Knock out near-black studio background on the official logo asset */
+const BLACK_THRESHOLD = 52
 
-function getLogoUrl(): string {
-  if (typeof window === 'undefined') return LOGO_PATH
-  return `${window.location.origin}${LOGO_PATH}`
+function logoUrlCandidates(): string[] {
+  if (typeof window === 'undefined') return []
+  const o = window.location.origin
+  return [`${o}${LOGO_PATH_PNG}`, `${o}${LOGO_PATH_SVG}`]
 }
 
 function loadImage(src: string, crossOrigin: 'anonymous' | '' | null = null): Promise<HTMLImageElement> {
@@ -32,7 +36,6 @@ function loadImage(src: string, crossOrigin: 'anonymous' | '' | null = null): Pr
   })
 }
 
-/** Fetch image as blob and return object URL so canvas is not tainted by cross-origin. */
 async function fetchAsObjectUrl(url: string): Promise<string> {
   const res = await fetch(url, { mode: 'cors' })
   if (!res.ok) throw new Error('Fetch failed')
@@ -40,7 +43,6 @@ async function fetchAsObjectUrl(url: string): Promise<string> {
   return URL.createObjectURL(blob)
 }
 
-/** Make dark/black pixels in the canvas transparent so logo has no black background. */
 function makeBlackTransparent(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   const imageData = ctx.getImageData(0, 0, w, h)
   const data = imageData.data
@@ -55,7 +57,6 @@ function makeBlackTransparent(ctx: CanvasRenderingContext2D, w: number, h: numbe
   ctx.putImageData(imageData, 0, 0)
 }
 
-/** Draw repeated diagonal watermarks across the full image (semi-transparent white text). */
 function drawWatermarkPattern(ctx: CanvasRenderingContext2D, imgW: number, imgH: number): void {
   const minDim = Math.min(imgW, imgH)
   const fontSize = Math.max(28, minDim * WATERMARK_FONT_SIZE_RATIO)
@@ -66,6 +67,8 @@ function drawWatermarkPattern(ctx: CanvasRenderingContext2D, imgW: number, imgH:
   ctx.save()
   ctx.font = `600 ${fontSize}px sans-serif`
   ctx.fillStyle = `rgba(255, 255, 255, ${WATERMARK_OPACITY})`
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)'
+  ctx.lineWidth = Math.max(1, fontSize * 0.05)
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
 
@@ -77,6 +80,7 @@ function drawWatermarkPattern(ctx: CanvasRenderingContext2D, imgW: number, imgH:
       ctx.save()
       ctx.translate(cx, cy)
       ctx.rotate(angleRad)
+      ctx.strokeText(WATERMARK_TEXT, 0, 0)
       ctx.fillText(WATERMARK_TEXT, 0, 0)
       ctx.restore()
     }
@@ -85,9 +89,79 @@ function drawWatermarkPattern(ctx: CanvasRenderingContext2D, imgW: number, imgH:
   ctx.restore()
 }
 
+/** Bottom-right "tatva:Ops" when PNG/SVG do not load (matches app header colors). */
+function drawCornerWordmarkFallback(ctx: CanvasRenderingContext2D, imgW: number, imgH: number): void {
+  const padding = Math.max(10, Math.min(imgW, imgH) * PADDING_RATIO)
+  const fontSize = Math.max(16, Math.min(imgW, imgH) * 0.038)
+  const y = imgH - padding
+  const t1 = 'tatva'
+  const t2 = ':Ops'
+  ctx.save()
+  ctx.textBaseline = 'bottom'
+  ctx.textAlign = 'right'
+  ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`
+  const w2 = ctx.measureText(t2).width
+  ctx.font = `700 ${fontSize}px system-ui, -apple-system, sans-serif`
+  const w1 = ctx.measureText(t1).width
+  const xRight = imgW - padding
+  let x = xRight
+  ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`
+  ctx.lineWidth = Math.max(2.5, fontSize * 0.14)
+  ctx.strokeStyle = 'rgba(15, 23, 42, 0.92)'
+  ctx.fillStyle = '#f1f5f9'
+  ctx.strokeText(t2, x, y)
+  ctx.fillText(t2, x, y)
+  x -= w2
+  ctx.font = `700 ${fontSize}px system-ui, -apple-system, sans-serif`
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.72)'
+  ctx.fillStyle = '#ec4899'
+  ctx.strokeText(t1, x, y)
+  ctx.fillText(t1, x, y)
+  ctx.restore()
+}
+
+async function drawCornerLogoOnContext(
+  ctx: CanvasRenderingContext2D,
+  imgW: number,
+  imgH: number
+): Promise<void> {
+  const padding = Math.max(8, Math.min(imgW, imgH) * PADDING_RATIO)
+  const maxLogoW = Math.max(LOGO_MIN_SIZE, imgW * LOGO_MAX_WIDTH_RATIO)
+  const maxLogoH = Math.max(LOGO_MIN_SIZE, imgH * LOGO_MAX_HEIGHT_RATIO)
+
+  for (const logoUrl of logoUrlCandidates()) {
+    try {
+      const logoImg = await loadImage(logoUrl, 'anonymous')
+      let logoW = logoImg.naturalWidth
+      let logoH = logoImg.naturalHeight
+      if (logoW <= 0 || logoH <= 0) continue
+      const scale = Math.min(maxLogoW / logoW, maxLogoH / logoH, 1)
+      logoW = Math.round(logoW * scale)
+      logoH = Math.round(logoH * scale)
+      if (logoW < 20 || logoH < 20) continue
+      const x = imgW - logoW - padding
+      const y = imgH - logoH - padding
+      const off = document.createElement('canvas')
+      off.width = logoW
+      off.height = logoH
+      const offCtx = off.getContext('2d')
+      if (offCtx) {
+        offCtx.drawImage(logoImg, 0, 0, logoW, logoH)
+        makeBlackTransparent(offCtx, logoW, logoH)
+        ctx.drawImage(off, x, y, logoW, logoH)
+      } else {
+        ctx.drawImage(logoImg, x, y, logoW, logoH)
+      }
+      return
+    } catch {
+      continue
+    }
+  }
+  drawCornerWordmarkFallback(ctx, imgW, imgH)
+}
+
 /**
- * Applies the repeated diagonal watermark pattern to an image and returns the result as a data URL.
- * Use this when displaying the generated image so every output shows the watermark immediately.
+ * Diagonal pattern only for on-screen previews (corner logo is added on download only).
  */
 export async function applyWatermarkToImage(imageUrl: string): Promise<string> {
   const canvas = document.createElement('canvas')
@@ -118,6 +192,9 @@ export async function applyWatermarkToImage(imageUrl: string): Promise<string> {
   }
 }
 
+/**
+ * Saves PNG with bottom-right TatvaOps logo (on top of the preview — usually diagonal text already baked in).
+ */
 export async function downloadImageWithLogo(
   imageUrl: string,
   filename: string = `room-configuration-${Date.now()}.png`
@@ -142,57 +219,7 @@ export async function downloadImageWithLogo(
     canvas.width = imgW
     canvas.height = imgH
     ctx.drawImage(mainImg, 0, 0)
-
-    // Image is already watermarked when displayed; only add corner logo on download
-    const logoUrl = getLogoUrl()
-    try {
-      const logoImg = await loadImage(logoUrl, 'anonymous')
-      const padding = Math.max(8, Math.min(imgW, imgH) * PADDING_RATIO)
-      const maxLogoW = Math.max(LOGO_MIN_SIZE, imgW * LOGO_MAX_WIDTH_RATIO)
-      const maxLogoH = Math.max(LOGO_MIN_SIZE, imgH * LOGO_MAX_HEIGHT_RATIO)
-      let logoW = logoImg.naturalWidth
-      let logoH = logoImg.naturalHeight
-      if (logoW > 0 && logoH > 0) {
-        const scale = Math.min(maxLogoW / logoW, maxLogoH / logoH, 1)
-        logoW = Math.round(logoW * scale)
-        logoH = Math.round(logoH * scale)
-        if (logoW >= 20 && logoH >= 20) {
-          const x = imgW - logoW - padding
-          const y = imgH - logoH - padding
-          const off = document.createElement('canvas')
-          off.width = logoW
-          off.height = logoH
-          const offCtx = off.getContext('2d')
-          if (offCtx) {
-            offCtx.drawImage(logoImg, 0, 0, logoW, logoH)
-            makeBlackTransparent(offCtx, logoW, logoH)
-            ctx.drawImage(off, x, y, logoW, logoH)
-          } else {
-            ctx.drawImage(logoImg, x, y, logoW, logoH)
-          }
-        }
-      }
-    } catch {
-      // Logo image failed; draw text watermark so branding still appears
-      try {
-        const padding = Math.max(8, Math.min(imgW, imgH) * PADDING_RATIO)
-        const fontSize = Math.max(12, Math.min(imgW, imgH) * 0.03)
-        ctx.font = `600 ${fontSize}px sans-serif`
-        ctx.fillStyle = 'rgba(0,0,0,0.6)'
-        ctx.strokeStyle = 'rgba(255,255,255,0.8)'
-        ctx.lineWidth = 2
-        const text = 'TatvaOps'
-        ctx.measureText(text)
-        const textW = ctx.measureText(text).width
-        const textH = fontSize * 1.2
-        const x = imgW - textW - padding * 2
-        const y = imgH - padding
-        ctx.strokeText(text, x, y)
-        ctx.fillText(text, x, y)
-      } catch {
-        // ignore
-      }
-    }
+    await drawCornerLogoOnContext(ctx, imgW, imgH)
 
     canvas.toBlob(
       (blob) => {

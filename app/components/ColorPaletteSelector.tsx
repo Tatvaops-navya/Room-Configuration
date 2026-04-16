@@ -123,6 +123,8 @@ interface ColorPaletteSelectorProps {
   onSelect: (paletteId: string) => void
   variant?: 'internal' | 'external'
   disabled?: boolean
+  /** Compact layout for side panels: 4 columns, smaller cards */
+  compact?: boolean
 }
 
 export default function ColorPaletteSelector({
@@ -130,17 +132,35 @@ export default function ColorPaletteSelector({
   onSelect,
   variant = 'internal',
   disabled = false,
+  compact = false,
 }: ColorPaletteSelectorProps) {
   return (
-    <div className="card">
-      <div className="step-label">{variant === 'external' ? '🏡' : '🏠'} Color palette (optional)</div>
-      <div className="step-title-row">
-        <h2>Select a color palette (Optional)</h2>
-      </div>
-      <p className="hint-text" style={{ marginBottom: '1rem' }}>
-        Choose a color palette to guide the AI. The {variant === 'external' ? 'exterior' : 'room'} will be generated or reconfigured based on your style and this palette.
-      </p>
-      <div className="color-palette-grid">
+    <div className={compact ? '' : 'card'} style={compact ? { marginBottom: '1rem' } : undefined}>
+      {!compact && <div className="step-label">{variant === 'external' ? '🏡' : '🏠'} Color palette (optional)</div>}
+      {!compact && (
+        <div className="step-title-row">
+          <h2>Select a color palette (Optional)</h2>
+        </div>
+      )}
+      {compact ? (
+        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Color palette (optional)</label>
+      ) : (
+        <p className="hint-text" style={{ marginBottom: '1rem' }}>
+          Choose a color palette to guide the AI. The {variant === 'external' ? 'exterior' : 'room'} will be generated or reconfigured based on your style and this palette.
+        </p>
+      )}
+      <div
+        className={compact ? '' : 'color-palette-grid'}
+        style={
+          compact
+            ? {
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                gap: '0.5rem',
+              }
+            : undefined
+        }
+      >
         {COLOR_PALETTE_OPTIONS.map((palette) => {
           const isSelected = selectedPalette === palette.id
           const isSurprise = palette.id === 'surprise_me'
@@ -148,11 +168,11 @@ export default function ColorPaletteSelector({
             <button
               key={palette.id}
               type="button"
-              className={`color-palette-card ${isSelected ? 'selected' : ''}`}
+              className={`color-palette-card ${isSelected ? 'selected' : ''} ${compact ? 'color-palette-compact' : ''}`}
               disabled={disabled}
               onClick={() => onSelect(palette.id)}
             >
-              <div className="color-palette-visual">
+              <div className={compact ? 'color-palette-visual-compact' : 'color-palette-visual'}>
                 {isSurprise ? (
                   <span className="color-palette-icon" aria-hidden>🎉</span>
                 ) : (
@@ -167,8 +187,8 @@ export default function ColorPaletteSelector({
                   </div>
                 )}
               </div>
-              <div className="color-palette-name">{palette.name}</div>
-              {palette.description && (
+              <div className={compact ? 'color-palette-name-compact' : 'color-palette-name'}>{palette.name}</div>
+              {!compact && palette.description && (
                 <div className="color-palette-desc">{palette.description}</div>
               )}
             </button>

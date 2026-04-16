@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { COMPONENT_BASED_CONFIG_ENABLED } from '@/app/experimental/featureFlags'
 
 /**
  * ConfigurationSelector Component
@@ -21,8 +22,8 @@ interface ArrangementConfig {
 }
 
 interface ConfigurationSelectorProps {
-  configMode: 'purpose' | 'arrangement'
-  onConfigModeChange: (mode: 'purpose' | 'arrangement') => void
+  configMode: 'purpose' | 'arrangement' | 'customization'
+  onConfigModeChange: (mode: 'purpose' | 'arrangement' | 'customization') => void
   arrangementConfig: ArrangementConfig
   onArrangementChange: (field: string, value: unknown) => void
   /** 'internal' = room; 'external' = facade/compound. Changes labels (Full room vs Full external, etc.) */
@@ -58,8 +59,10 @@ export default function ConfigurationSelector({
   const [showFullReport, setShowFullReport] = useState(false)
   const isExternal = variant === 'external'
   const fullLabel = isExternal ? 'Full external configuration' : 'Full Room Configuration'
+  const customizationLabel = isExternal ? 'Custom exterior components' : 'Custom Room Components'
   const componentLabel = isExternal ? 'Component-based external configuration' : 'Component-based Configuration'
-  const componentBasedConfigEnabled = false // Set to true to re-enable component-based configuration
+  /** Dead / experimental path: full implementation lives in this file and page.tsx arrangement branch. */
+  const componentBasedConfigEnabled = COMPONENT_BASED_CONFIG_ENABLED
   useEffect(() => {
     if (!componentBasedConfigEnabled && configMode === 'arrangement') {
       onConfigModeChange('purpose')
@@ -79,6 +82,16 @@ export default function ConfigurationSelector({
             onChange={() => onConfigModeChange('purpose')}
           />
           <label htmlFor="mode-purpose">{fullLabel}</label>
+        </div>
+        <div className="radio-option">
+          <input
+            type="radio"
+            id="mode-customization"
+            name="configMode"
+            checked={configMode === 'customization'}
+            onChange={() => onConfigModeChange('customization')}
+          />
+          <label htmlFor="mode-customization">{customizationLabel}</label>
         </div>
         {componentBasedConfigEnabled && (
           <div className="radio-option">
