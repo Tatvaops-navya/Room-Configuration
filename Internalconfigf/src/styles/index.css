@@ -1,0 +1,28 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* Hide scrollbar for horizontal scroll rails */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+
+@keyframes dotPulse {
+  0%, 100% { background: rgba(255,255,255,0.12); transform: scale(1); }
+  50% { background: rgba(255,255,255,0.8); transform: scale(1.5); }
+}
+
+@keyframes dotBlink {
+  0%, 100% { opacity: 0.08; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.4); }
+}
+
+@keyframes dotSweep {
+  0% { opacity: 0.08; transform: scale(1); }
+  30% { opacity: 0.9; transform: scale(1.5); }
+  100% { opacity: 0.08; transform: scale(1); }
+}
+
+@keyframes dotPulse {
+  0%, 100% { background: rgba(255,255,255,0.1); }
+  50% { background: rgba(255,255,255,0.85); }
+}

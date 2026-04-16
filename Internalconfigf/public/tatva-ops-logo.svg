@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="44" viewBox="0 0 220 44" role="img" aria-label="TatvaOps">
+  <defs>
+    <filter id="wmShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <text x="2" y="30" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-weight="700" font-size="24" fill="#ec4899" filter="url(#wmShadow)">tatva</text>
+  <text x="76" y="30" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-weight="600" font-size="24" fill="#f8fafc" stroke="#0f172a" stroke-width="1.2" paint-order="stroke fill" filter="url(#wmShadow)">:Ops</text>
+</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="44" viewBox="0 0 220 44" role="img" aria-label="TatvaOps">
+  <defs>
+    <filter id="wmShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <text x="2" y="30" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-weight="700" font-size="24" fill="#ec4899" filter="url(#wmShadow)">tatva</text>
+  <text x="76" y="30" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-weight="600" font-size="24" fill="#f8fafc" stroke="#0f172a" stroke-width="1.2" paint-order="stroke fill" filter="url(#wmShadow)">:Ops</text>
+</svg>
