@@ -1,4 +1,4 @@
-import { useState, useRef, useLayoutEffect, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useLayoutEffect, useCallback, useEffect, useMemo } from 'react';
 import {
   postRoomGenerate,
   postCustomizationGenerate,
@@ -91,10 +91,12 @@ function IconShare() {
   );
 }
 
-function IconLike() {
+function IconLike({ active = false }: { active?: boolean }) {
+  const heartColor = active ? '#ef4444' : 'rgba(255,255,255,0.85)';
   return (
     <svg width="14" height="14" fill="none" viewBox="0 0 14 14">
-      <path d={svgPaths.p168026f2} stroke="rgba(255,255,255,0.85)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.16667" />
+      {active && <path d={svgPaths.p168026f2} fill={heartColor} fillOpacity="0.95" />}
+      <path d={svgPaths.p168026f2} stroke={heartColor} strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.16667" />
     </svg>
   );
 }
@@ -1826,6 +1828,7 @@ export function GenerationResults({
       const data = await postCustomizationGenerate({
         configType: roomSession.configType,
         currentResultImage,
+        layoutAnchorImage: roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage,
         customizationStyles: { [elementType]: optionId },
         customizationLabels: { [elementType]: entry },
         selectedStyle,
@@ -1962,7 +1965,7 @@ export function GenerationResults({
     }
     if (!roomSession) {
       setApiError(
-        'Finish the room wizard first. With Vite dev, run the Next app on port 3000 so /api/add is available.'
+        'Finish the room wizard first. With Vite dev, run the Next app on port 3000 so /api/edit is available.'
       );
       return;
     }
@@ -2032,18 +2035,20 @@ export function GenerationResults({
         if (row) styleDesc = row.title;
       }
       const parts: string[] = [
-        `Add a new ${addSelectedCategory.toLowerCase()} (${elementType}) inside the white masked region only.`,
+        `Apply the selected look to the ${addSelectedCategory.toLowerCase()} only (${elementType}) inside the white masked region. Keep the same room layout, camera angle, perspective, and all other surfaces and objects unchanged.`,
       ];
       if (styleDesc) parts.push(`Reference style / product: ${styleDesc}.`);
       if (addSelectedMaterial?.trim()) parts.push(`Material / finish: ${addSelectedMaterial.trim()}.`);
       if (addSelectedColorDots?.length) {
-        parts.push(`Colours (hex): ${addSelectedColorDots.join(', ')}.`);
+        parts.push(
+          `Colours (hex): ${addSelectedColorDots.join(', ')} — use visibly on this element where appropriate.`
+        );
       }
       if (isCatalogProductStyleKey(addSelectedStyleSwatch)) {
         parts.push(EXACT_CATALOG_OBJECT_INSTRUCTION);
       }
       parts.push(
-        'Photorealistic 3D integration: match room lighting direction, soft contact shadow at the base, and material-appropriate highlights. Continue rug or floor texture under the object — do not swap surfaces. The whole object must fit fully inside the mask with natural margins (no cropped top/sides/base). No halo or double floor pattern at the mask edge. Do not modify any pixels outside the masked area.'
+        'Photorealistic, seamless blend. Match room lighting direction, perspective, and material highlights. Keep strict masked inpaint boundaries: render only in the masked area and do not modify pixels outside the mask.'
       );
       if (elementType === 'wall' || elementType === 'floor' || elementType === 'ceiling') {
         parts.push(
@@ -2067,23 +2072,13 @@ export function GenerationResults({
       return;
     }
     const imageDataUrl = dataUrlResult;
-    const addMaskBbox = (() => {
-      // Slightly expand add-object mask so full object can fit without edge clipping.
-      const expand = addObjectSubPanel === 'generatePrompt' ? 0.0 : 0.06;
-      const x = Math.max(0, bbox.x - bbox.width * expand);
-      const y = Math.max(0, bbox.y - bbox.height * expand);
-      const right = Math.min(1, bbox.x + bbox.width * (1 + expand));
-      const bottom = Math.min(1, bbox.y + bbox.height * (1 + expand));
-      const width = Math.max(0.02, right - x);
-      const height = Math.max(0.02, bottom - y);
-      return { x, y, width, height };
-    })();
-    const useFeatherForAdd = !(addObjectSubPanel === 'generatePrompt');
+    // Keep Add behavior aligned with Edit/Replace masked-inpaint:
+    // use the exact user selection (no add-only expansion/feather tricks).
+    const addMaskBbox = bbox;
     const addCategory = addSelectedCategory ? mapEditCategoryToApiElement(addSelectedCategory) : undefined;
     const maskDataUrl = await createMaskFromBoundingBox(imageDataUrl, addMaskBbox, {
-      autoFeatherForAdd: useFeatherForAdd,
       category: addCategory,
-      expandGlobalSurface: true,
+      expandGlobalSurface: false,
     });
     if (!maskDataUrl) {
       setApiError('Could not build the selection mask. Try again.');
@@ -2109,10 +2104,20 @@ export function GenerationResults({
         el === 'cabinet';
       if (refEligible) {
         if (addSelectedStyleSwatch?.trim()) {
-          const row = catalogStyleSwatchRows.find((r) => r.k === addSelectedStyleSwatch);
-          if (row?.img?.trim()) {
-            const conv = await ensureGenerateImageDataUrl(row.img.trim());
-            if (typeof conv === 'string') referenceImageDataUrl = conv;
+          const mytylesMatch = addSelectedStyleSwatch.match(/^mytyles-(\d+)$/);
+          if (mytylesMatch) {
+            const id = Number(mytylesMatch[1]);
+            const tile = editMytylesTiles.find((t) => t.id === id);
+            if (tile?.imageUrl?.trim()) {
+              const conv = await ensureGenerateImageDataUrl(tile.imageUrl.trim());
+              if (typeof conv === 'string') referenceImageDataUrl = conv;
+            }
+          } else {
+            const row = catalogStyleSwatchRows.find((r) => r.k === addSelectedStyleSwatch);
+            if (row?.img?.trim()) {
+              const conv = await ensureGenerateImageDataUrl(row.img.trim());
+              if (typeof conv === 'string') referenceImageDataUrl = conv;
+            }
           }
         }
         if (!referenceImageDataUrl && addSelectedMaterial?.trim() && addSelectedMaterialImageUrl?.trim()) {
@@ -2296,34 +2301,28 @@ export function GenerationResults({
       return;
     }
 
-    let prompt = '';
-    let referenceImageDataUrl: string | undefined;
+    let optionId = '';
+    let label = 'Custom replace';
+    let referenceImageUrl: string | undefined;
     if (replaceSubPanel === 'generatePrompt') {
       if (!repPromptText.trim()) {
         setApiError('Enter a prompt describing the replacement, or use the catalog / Upload.');
         return;
       }
-      prompt = buildReplaceWithPhrase(
-        [
-          repPromptText.trim(),
-          'Replace only inside the masked area: fully remove what was there—no stacking or new object in front of the old one. Photorealistic; match lighting and scale; unchanged outside the mask.',
-        ].join(' ')
-      );
+      optionId = `replace:${repPromptText.trim()}`;
+      label = repPromptText.trim();
     } else if (replaceSubPanel === 'uploadedComponent') {
       if (repConfirmedUploadImages.length === 0) {
         setApiError('Confirm at least one uploaded reference image before replacing.');
         return;
       }
-      const n = repConfirmedUploadImages.length;
-      const base = `${n} reference image(s) from the user; in the masked region fully remove the existing subject then show only one new piece matching those references (no duplicate/layered furniture)`;
-      const detail = repUploadedCompColour?.trim()
-        ? `${base}. Preferred colour: ${repUploadedCompColour.trim()}.`
-        : `${base}.`;
-      prompt = buildReplaceWithPhrase(detail);
+      optionId = 'replace:uploaded-reference';
+      label = repUploadedCompColour?.trim()
+        ? `Uploaded reference — ${repUploadedCompColour.trim()}`
+        : 'Uploaded reference replacement';
       const firstRef = repConfirmedUploadImages[0]?.trim();
       if (firstRef) {
-        const conv = await ensureGenerateImageDataUrl(firstRef);
-        if (typeof conv === 'string') referenceImageDataUrl = conv;
+        referenceImageUrl = firstRef;
       }
     } else if (!replaceSubPanel && replaceSelectedCategory) {
       const hasPick =
@@ -2335,36 +2334,59 @@ export function GenerationResults({
         return;
       }
       const elementType = mapEditCategoryToApiElement(replaceSelectedCategory);
+      optionId =
+        replaceSelectedStyleSwatch?.trim() ||
+        (replaceSelectedMaterial ? `material:${replaceSelectedMaterial}` : '') ||
+        (replaceSelectedColorDots?.length ? `color:${replaceSelectedColorDots.join(',')}` : '');
+      if (!optionId) {
+        setApiError('Select a style, colour, or material for this category.');
+        return;
+      }
       let styleDesc = '';
       const mytylesMatch = replaceSelectedStyleSwatch?.match(/^mytyles-(\d+)$/);
       if (mytylesMatch) {
         const id = Number(mytylesMatch[1]);
         const tile = editMytylesTiles.find((t) => t.id === id);
-        if (tile) styleDesc = tile.label;
+        if (tile) {
+          styleDesc = tile.label;
+          label = tile.label;
+          if (elementType === 'wall' || elementType === 'floor') {
+            referenceImageUrl = tile.imageUrl;
+          }
+        }
       } else if (replaceSelectedStyleSwatch?.trim()) {
         const row = catalogStyleSwatchRows.find((r) => r.k === replaceSelectedStyleSwatch);
-        if (row) styleDesc = row.title;
+        if (row) {
+          styleDesc = row.title;
+          label = row.title;
+          if (
+            elementType === 'wall' ||
+            elementType === 'floor' ||
+            elementType === 'ceiling' ||
+            elementType === 'sofa' ||
+            elementType === 'chair' ||
+            elementType === 'bed' ||
+            elementType === 'mattress' ||
+            elementType === 'carpet' ||
+            elementType === 'lighting' ||
+            elementType === 'decor' ||
+            elementType === 'table' ||
+            elementType === 'desk' ||
+            elementType === 'dining' ||
+            elementType === 'cabinet'
+          ) {
+            referenceImageUrl = row.img;
+          }
+        }
       }
-      const parts: string[] = [
-        `In the masked region, remove the existing ${replaceSelectedCategory.toLowerCase()} completely and show only one new ${replaceSelectedCategory.toLowerCase()} (${elementType})—not an extra piece in front of the old one.`,
-      ];
-      if (styleDesc) parts.push(`Reference style / product: ${styleDesc}.`);
-      if (replaceSelectedMaterial?.trim()) parts.push(`Material / finish: ${replaceSelectedMaterial.trim()}.`);
-      if (replaceSelectedColorDots?.length) {
-        parts.push(`Colours (hex): ${replaceSelectedColorDots.join(', ')}.`);
+      if (replaceSelectedMaterial?.trim()) {
+        if (!replaceSelectedStyleSwatch?.trim()) {
+          label = `${replaceSelectedCategory} — ${replaceSelectedMaterial}`;
+        }
       }
-      if (isCatalogProductStyleKey(replaceSelectedStyleSwatch)) {
-        parts.push(EXACT_CATALOG_OBJECT_INSTRUCTION);
+      if (replaceSelectedColorDots?.length && !replaceSelectedStyleSwatch?.trim() && !replaceSelectedMaterial?.trim()) {
+        label = `${replaceSelectedCategory} — colour update`;
       }
-      parts.push(
-        'Photorealistic; match room lighting, shadows, scale, and perspective. Only the mask may change; outside the mask must stay pixel-identical.'
-      );
-      if (elementType === 'wall' || elementType === 'floor' || elementType === 'ceiling') {
-        parts.push(
-          'If category is wall/floor/ceiling: apply replacement across the ENTIRE detected surface, not only the selected patch. Preserve structural boundaries and do not spill into windows, curtains, or wood trim.'
-        );
-      }
-      prompt = buildReplaceWithPhrase(parts.join(' '));
       const refEligible =
         elementType === 'wall' ||
         elementType === 'floor' ||
@@ -2381,23 +2403,15 @@ export function GenerationResults({
         elementType === 'dining' ||
         elementType === 'cabinet';
       if (refEligible) {
-        if (replaceSelectedStyleSwatch?.trim()) {
-          const row = catalogStyleSwatchRows.find((r) => r.k === replaceSelectedStyleSwatch);
-          if (row?.img?.trim()) {
-            const conv = await ensureGenerateImageDataUrl(row.img.trim());
-            if (typeof conv === 'string') referenceImageDataUrl = conv;
-          }
-        }
         if (
-          !referenceImageDataUrl &&
+          !referenceImageUrl &&
           replaceSelectedMaterial?.trim() &&
           replaceSelectedMaterialImageUrl?.trim()
         ) {
-          const conv = await ensureGenerateImageDataUrl(replaceSelectedMaterialImageUrl.trim());
-          if (typeof conv === 'string') referenceImageDataUrl = conv;
+          referenceImageUrl = replaceSelectedMaterialImageUrl.trim();
         }
       }
-      if (isCatalogProductStyleKey(replaceSelectedStyleSwatch) && !referenceImageDataUrl) {
+      if (isCatalogProductStyleKey(replaceSelectedStyleSwatch) && !referenceImageUrl) {
         setApiError('Could not load the selected catalog reference image. Please select another swatch and try again.');
         return;
       }
@@ -2411,50 +2425,56 @@ export function GenerationResults({
       roomSession.imagesDataUrl[roomSession.layoutIndex] ||
       roomSession.imagesDataUrl[0] ||
       '';
-    const dataUrlResult = await ensureGenerateImageDataUrl(rawSource);
-    if (typeof dataUrlResult === 'object' && 'error' in dataUrlResult) {
-      setApiError(dataUrlResult.error);
+    const currentResultImage = rawSource.trim();
+    if (!currentResultImage) {
+      setApiError('No image to customize. Generate or upload a room image first.');
       return;
     }
-    const imageDataUrl = dataUrlResult;
-    const replaceCategory = replaceSelectedCategory ? mapEditCategoryToApiElement(replaceSelectedCategory) : undefined;
-    const replaceMaskBbox = (() => {
-      // More aggressive expansion for object replacement so old-object edges are fully removed.
-      const isGlobalSurface =
-        replaceCategory === 'wall' || replaceCategory === 'floor' || replaceCategory === 'ceiling';
-      const expand = isGlobalSurface ? 0.08 : 0.18;
-      const x = Math.max(0, bbox.x - bbox.width * expand);
-      const y = Math.max(0, bbox.y - bbox.height * expand);
-      const right = Math.min(1, bbox.x + bbox.width * (1 + expand));
-      const bottom = Math.min(1, bbox.y + bbox.height * (1 + expand));
-      const width = Math.max(0.01, right - x);
-      const height = Math.max(0.01, bottom - y);
-      return { x, y, width, height };
-    })();
-    const maskDataUrl = await createMaskFromBoundingBox(imageDataUrl, replaceMaskBbox, {
-      featherPx:
-        replaceCategory === 'wall' || replaceCategory === 'floor' || replaceCategory === 'ceiling'
-          ? 3
-          : 5,
-      category: replaceCategory,
-      expandGlobalSurface: true,
-    });
-    if (!maskDataUrl) {
-      setApiError('Could not build the selection mask. Try again.');
-      return;
+    const elementType = mapEditCategoryToApiElement(replaceSelectedCategory || 'decor');
+    const horizontal =
+      bbox.x + bbox.width / 2 < 0.33 ? 'left' : bbox.x + bbox.width / 2 > 0.66 ? 'right' : 'center'
+    const vertical =
+      bbox.y + bbox.height / 2 < 0.33 ? 'upper' : bbox.y + bbox.height / 2 > 0.66 ? 'lower' : 'middle'
+    const descParts: string[] = [
+      `Apply the selected look to only the ${replaceSelectedCategory?.toLowerCase() || 'selected object'} (${elementType}) in the user-selected ${vertical}-${horizontal} region. Keep the same room layout, camera angle, perspective, and all other surfaces and objects unchanged.`,
+      'Only the object inside the selected region should change. Do not alter matching objects elsewhere in the room.',
+    ];
+    if (replaceSelectedMaterial?.trim()) {
+      descParts.push(`Material / finish: ${replaceSelectedMaterial}.`);
     }
+    if (replaceSelectedColorDots?.length) {
+      descParts.push(
+        `Colours (hex): ${replaceSelectedColorDots.join(', ')} — use visibly on this element where appropriate.`
+      );
+    }
+    if (repUploadedCompColour?.trim() && replaceSubPanel === 'uploadedComponent') {
+      descParts.push(`Preferred colour: ${repUploadedCompColour.trim()}.`);
+    }
+    if (referenceImageUrl && isCatalogProductStyleKey(replaceSelectedStyleSwatch)) {
+      descParts.push(EXACT_CATALOG_OBJECT_INSTRUCTION);
+    }
+    const entry: CustomizationLabelEntry = {
+      label: label.length > 120 ? `${label.slice(0, 117)}…` : label,
+      description: descParts.join(' '),
+      isDecor: false,
+      action: 'replace',
+      ...(referenceImageUrl ? { referenceImageUrl } : {}),
+    };
 
-    if (rawSource.trim()) setCompareBeforeOverride(rawSource.trim());
+    if (currentResultImage) setCompareBeforeOverride(currentResultImage);
     setApiGenerating(true);
     setApiGenerateKind('replace');
     setApiError(null);
     setApiWarning(null);
     try {
-      const data = await postRoomReplace({
-        imageDataUrl,
-        maskDataUrl,
-        prompt,
-        referenceImageDataUrl,
+      const data = await postCustomizationGenerate({
+        configType: roomSession.configType,
+        currentResultImage,
+        layoutAnchorImage: roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage,
+        customizationStyles: { [elementType]: optionId },
+        customizationLabels: { [elementType]: entry },
+        selectedStyle,
+        selectedColorPaletteId: paletteDisplayNameToApiId(selectedPalette) ?? undefined,
       });
       if (data.error) {
         setApiError(data.error);
@@ -2532,13 +2552,15 @@ export function GenerationResults({
     }
     const eraseRegion = useFullComponentsErase
       ? { x: 0.02, y: 0.02, width: 0.96, height: 0.96 }
-      : capturePercentRectToEraseRegion(
-          panel.offsetWidth,
-          panel.offsetHeight,
-          imgEl.naturalWidth,
-          imgEl.naturalHeight,
-          captureRect
-        );
+      : captureRect
+        ? capturePercentRectToEraseRegion(
+            panel.offsetWidth,
+            panel.offsetHeight,
+            imgEl.naturalWidth,
+            imgEl.naturalHeight,
+            captureRect
+          )
+        : null;
     if (!eraseRegion) {
       setApiError('Selection too small or invalid. Draw a larger area on the image.');
       return;
@@ -3292,7 +3314,7 @@ export function GenerationResults({
           <ToolbarDivider />
           {/* Like */}
           <ToolbarButton
-            icon={<IconLike />}
+            icon={<IconLike active={liked} />}
             label={liked ? "Liked" : "Like"}
             onClick={handleToggleLike}
             disabled={!afterImage}
@@ -4131,9 +4153,84 @@ export function GenerationResults({
                   </div>
                 )}
               </div>
-              <div style={{ padding: '8px 16px 0', display: 'flex', flexWrap: 'wrap', gap: '10px 14px', flexShrink: 0 }}>
-                <button type="button" onClick={() => setShowUploadModal(true)} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'rgba(255,255,255,0.55)', cursor: 'pointer', textDecoration: 'underline', fontFamily: "'Inter', sans-serif" }}>Upload reference</button>
-                <button type="button" onClick={() => setAddObjectSubPanel('generatePrompt')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'rgba(255,255,255,0.55)', cursor: 'pointer', textDecoration: 'underline', fontFamily: "'Inter', sans-serif" }}>Text prompt</button>
+              <div style={{ padding: '8px 16px 0', display: 'flex', flexWrap: 'nowrap', gap: '8px', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowUploadModal(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.28)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    color: 'rgba(255,255,255,0.92)',
+                    cursor: 'pointer',
+                    fontFamily: "'Inter', sans-serif",
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Upload reference image"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21" />
+                    <path d="m14 19.5 3-3 3 3" />
+                    <path d="M17 22v-5.5" />
+                    <circle cx="9" cy="9" r="2" />
+                  </svg>
+                  <span>Upload</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddObjectSubPanel('generatePrompt')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.28)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    color: 'rgba(255,255,255,0.92)',
+                    cursor: 'pointer',
+                    fontFamily: "'Inter', sans-serif",
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Use text prompt"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M12 4v16" />
+                    <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
+                    <path d="M9 20h6" />
+                  </svg>
+                  <span>Text prompt</span>
+                </button>
               </div>
               <div style={{ padding: '12px 16px 16px', flexShrink: 0 }}>
                 {addSelectedCategory &&
@@ -4375,9 +4472,84 @@ export function GenerationResults({
                   </div>
                 )}
               </div>
-              <div style={{ padding: '8px 16px 0', display: 'flex', flexWrap: 'wrap', gap: '10px 14px', flexShrink: 0 }}>
-                <button type="button" onClick={() => setRepShowUploadModal(true)} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'rgba(255,255,255,0.55)', cursor: 'pointer', textDecoration: 'underline', fontFamily: "'Inter', sans-serif" }}>Upload reference</button>
-                <button type="button" onClick={() => setReplaceSubPanel('generatePrompt')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'rgba(255,255,255,0.55)', cursor: 'pointer', textDecoration: 'underline', fontFamily: "'Inter', sans-serif" }}>Text prompt</button>
+              <div style={{ padding: '8px 16px 0', display: 'flex', flexWrap: 'nowrap', gap: '8px', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setRepShowUploadModal(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.28)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    color: 'rgba(255,255,255,0.92)',
+                    cursor: 'pointer',
+                    fontFamily: "'Inter', sans-serif",
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Upload reference image"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21" />
+                    <path d="m14 19.5 3-3 3 3" />
+                    <path d="M17 22v-5.5" />
+                    <circle cx="9" cy="9" r="2" />
+                  </svg>
+                  <span>Upload</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReplaceSubPanel('generatePrompt')}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.28)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    color: 'rgba(255,255,255,0.92)',
+                    cursor: 'pointer',
+                    fontFamily: "'Inter', sans-serif",
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                  title="Use text prompt"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M12 4v16" />
+                    <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
+                    <path d="M9 20h6" />
+                  </svg>
+                  <span>Text prompt</span>
+                </button>
               </div>
               <div style={{ padding: '12px 16px 16px', flexShrink: 0 }}>
                 <button

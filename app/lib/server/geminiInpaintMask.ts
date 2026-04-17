@@ -644,27 +644,29 @@ User request: ${userPrompt || 'Add one plausible object that fits the space.'}`
         ? addPrompt
           : operation === 'edit'
           ? `${DESIGN_CONTEXT}${NO_LOGO}INPAINTING TASK: You are given two images. The FIRST image is the room. The SECOND image is a binary mask (white = region to modify, black = keep unchanged). Modify ONLY the white region according to the user's instructions. Do not change anything outside the white region. Preserve the exact same image dimensions, framing, and all unchanged pixels. No text or labels in the output.\n\nUser instructions: ${userPrompt || 'Restyle the selected region to match the room style.'}`
-          : `${DESIGN_CONTEXT}${NO_LOGO}REPLACE — FULL INPAINT (NOT ADD-ON-TOP): You receive (1) one interior photograph and (2) a mask on the same pixel grid. Output ONE photograph.
+          : `${DESIGN_CONTEXT}${NO_LOGO}REPLACE — FULL SCENE REGENERATION INSIDE MASK (NOT ADD-ON-TOP): You receive (1) one interior photograph and (2) a mask on the same pixel grid. Output ONE photograph.
 
-YOUR TASK: COMPLETELY REPLACE an existing object with a new one, seamlessly and photorealistically.
+YOUR TASK: COMPLETELY REPLACE an existing object with a new one, seamlessly and photorealistically, as a true in-scene regeneration inside the selected region.
 
 CRITICAL INSTRUCTIONS:
 
 1) COMPLETE OBJECT REMOVAL (MANDATORY)
 • Fully remove the existing object from the selected area.
-• Do NOT leave traces, ghosting, old edges, old shadows, silhouettes, or remnants.
-• Background/surfaces in the region must be clean before the new object appearance is resolved.
+• Remove all traces of the old object: shape, texture, shadows, highlights, silhouettes, edges, reflections, and remnants.
+• The original object must not be visible in any form after replacement.
+• First reconstruct the background and surfaces in the region naturally so the floor, wall, and surrounding areas are clean and continuous before the new object is resolved.
 
 2) NO OVERLAY / NO PARTIAL BLENDING (MANDATORY)
 • This is REPLACEMENT, not addition.
 • Do NOT paste or layer a new object on top of the old one.
-• Do NOT create visible seams, split regions, hard cut lines, or card-like patches.
+• Do NOT create visible seams, split regions, hard cut lines, card-like patches, transparency artifacts, or double structures.
 • The edited region must read as one continuous render.
 
 3) SEAMLESS BLENDING (MANDATORY)
 • No visible boundary between edited and original region.
 • Match local texture frequency, brightness, noise, and grain to surrounding pixels.
 • Avoid vertical/horizontal split artifacts and abrupt transitions at mask edges.
+• Edge quality is critical: no blur halo, no cut boundary, and no pasted-cutout look.
 
 4) LIGHTING CONSISTENCY (MANDATORY)
 • Match room lighting direction, intensity, and color temperature.
@@ -674,18 +676,21 @@ CRITICAL INSTRUCTIONS:
 5) PERSPECTIVE & SCALE ACCURACY (MANDATORY)
 • Align object with room geometry, floor plane, vanishing points, and camera angle.
 • Scale must be plausible relative to nearby furniture and architecture.
+• Ensure correct position and floor alignment relative to surrounding objects and surfaces.
 
 6) STRUCTURAL PRESERVATION (MANDATORY)
 • Do NOT alter walls, floor, ceiling, windows, doors, or room layout.
+• Do NOT alter decor, lighting fixtures, or background elements outside the selected region.
 • Only replace content inside the white mask.
 • Black mask pixels must remain identical to the first image.
 
 7) FINAL SELF-CHECK (MANDATORY)
 Before final output, verify:
-• no ghosting/remnants from old object
-• no seams/split lines/patch edges
+• old object is completely gone
+• no ghosting, transparency artifacts, or double structures
+• no seams, split lines, patch edges, or blur halos
 • lighting and shadow consistency
-• perspective and scale consistency
+• perspective, scale, and floor alignment consistency
 If any check fails, internally regenerate and fix before returning the final image.
 
 User instructions: ${userPrompt || 'Replace with one object that fits the room; remove the old subject entirely within the mask.'}`

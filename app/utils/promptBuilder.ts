@@ -314,12 +314,19 @@ export function buildPrompt(options: PromptBuilderOptions): string {
     const styleCapitalized = styleLabel ? styleLabel.charAt(0).toUpperCase() + styleLabel.slice(1) : ''
     const parts: string[] = []
     if (styleLabel) {
-      parts.push(`Apply ${styleCapitalized} design style to the uploaded image with photorealistic rendering. The overall look, materials, and mood must clearly reflect ${styleCapitalized} style.`)
+      parts.push(
+        `Apply ${styleCapitalized} design style to the uploaded image with photorealistic rendering. The final image must unmistakably and dominantly read as ${styleCapitalized} style, not as a generic room with only minor hints of that style. Style-defining cues in furniture forms, materials, finishes, decor language, and overall mood must be clearly visible at first glance.`
+      )
     }
     if (paletteText) {
       parts.push(paletteText)
-      parts.push('The OUTPUT must visibly use this color palette: walls, furniture, fabrics, rugs, accents, and decor should be in these colors. Do not use a different or generic color scheme; the selected palette must be clearly visible in the result.')
+      parts.push(
+        'The OUTPUT must visibly use this color palette as a dominant scheme: walls, furniture, fabrics, rugs, accents, and decor should clearly show these colors. Do not use a different, muted, or generic color scheme; the selected palette must be obvious in the result.'
+      )
     }
+    parts.push(
+      'If the selected style or color palette is not clearly visible in the final image, the result is incorrect and should be treated as a failed reconfiguration.'
+    )
     if (parts.length > 0) {
       userPrompt = parts.join('\n\n') + '\n\n' + userPrompt
     }

@@ -261,7 +261,7 @@ export default function PreviewPanel({ onApply, onCancel, className = '' }: Prev
       {!hasSelection ? (
         <p className="hint-text" style={{ margin: 0, fontSize: '0.9rem' }}>
           {mode === 'edit'
-            ? 'Pick an object on the left, choose Style / Colour / Material (or AI), then Confirm customisation. Draw a box on the image first if you want to limit the change to that region; otherwise the whole image is used as the mask.'
+            ? 'Pick an object on the left, choose Style / Colour / Material (or AI), then confirm customization. Edit applies through the normal edit flow without manual area selection.'
             : mode === 'add'
               ? 'Please select an area to place the object.'
               : `Select an area on the image to ${mode === 'replace' ? 'replace' : 'erase'}.`}

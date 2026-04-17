@@ -3,9 +3,7 @@
 import { useRoomEditorStore } from './roomEditorStore'
 import {
   editRegion,
-  replaceRegion,
   eraseRegion,
-  addObject,
   editCutout,
 } from './roomEditorApi'
 import { compositeCutoutsOntoImage } from './cutoutUtils'
@@ -65,12 +63,12 @@ function buildPreviewPrompt(): string {
     }
   }
   if (mode === 'replace') {
-    parts.push(buildReplaceWithPhrase(replaceOption.text, replaceOption.presetId))
+    return buildReplaceWithPhrase(replaceOption.text, replaceOption.presetId)
   }
   if (mode === 'add') {
     const t = addOption.text || addOption.presetId || 'a new object'
     parts.push(
-      `Render ${t} natively in the room photo: correct 3D perspective, scale, and floor contact for this camera angle — not a flat product cutout and never a white or gray studio backdrop. Continue the real floor or rug texture, pattern, and perspective under the object; do not swap rug for bare tile or leave a halo / duplicated floor pattern at the selection edge. No white or light strip along the bottom contact line. Strictly inside the selected mask only; unchanged outside. Match room light direction, soft ambient occlusion, and contact shadows; metal/glass speculars must match existing highlights in the scene.`
+      `Change only the selected area in this interior photo to add: ${t}. Keep every other surface, object, layout, and lighting unchanged. Photorealistic, seamless blend.`
     )
   }
   if (mode === 'erase') {
@@ -127,9 +125,11 @@ export async function runRoomEditorPreview(): Promise<void> {
 
   const cutoutUrl = selection.cutoutDataUrl
   const regionPx = selection.regionPx
+  // Catalog / AI edit uses masked inpaint via `editRegion` → `/api/edit` (same as replace).
+  // Optional cutout path is edit-only (lift-subject style). Replace always uses `editRegion` like
+  // normal edit — only the mask differs (user-selected region vs full-frame after Confirm).
   const useCutoutFlow =
-    (mode === 'edit' || mode === 'replace') &&
-    Boolean(cutoutUrl && regionPx && selection.maskDataUrl && prompt)
+    mode === 'edit' && Boolean(cutoutUrl && regionPx && selection.maskDataUrl && prompt)
 
   try {
     if (useCutoutFlow && cutoutUrl && regionPx) {
@@ -152,14 +152,14 @@ export async function runRoomEditorPreview(): Promise<void> {
     }
 
     let result
-    if (mode === 'edit') {
+    // Edit/Replace/Add now share the same placement path (`editRegion` inpaint).
+    // Difference is only the mask source:
+    // - edit: usually full-frame/object workflow
+    // - replace/add: user-selected region
+    if (mode === 'edit' || mode === 'replace' || mode === 'add') {
       result = await editRegion(workingImage, selection.maskDataUrl, prompt || undefined)
-    } else if (mode === 'replace') {
-      result = await replaceRegion(workingImage, selection.maskDataUrl, prompt || undefined)
     } else if (mode === 'erase') {
       result = await eraseRegion(workingImage, selection.maskDataUrl)
-    } else if (mode === 'add') {
-      result = await addObject(workingImage, selection.maskDataUrl, prompt)
     } else {
       useRoomEditorStore.setState({ previewLoading: false })
       return

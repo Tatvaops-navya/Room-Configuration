@@ -8,7 +8,6 @@ interface SelectionModeToolbarProps {
 }
 
 const HINT_BY_MODE: Partial<Record<EditorMode, string>> = {
-  edit: 'Draw a rectangle on the image to target one area, or use the catalog without drawing for a full-frame change.',
   add: 'Drag on the image to mark where the new object should go; it is scaled to fit that box.',
   replace: 'Drag around the object you want replaced.',
   erase: 'Drag around what you want removed.',

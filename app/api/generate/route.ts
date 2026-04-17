@@ -7,6 +7,7 @@ const GEMINI_TEXT_TIMEOUT_MS = 120_000
 const GEMINI_IMAGE_TIMEOUT_MS = 180_000
 const GEMINI_RETRY_ATTEMPTS = 2
 const GEMINI_RETRY_DELAY_MS = 3000
+const DEFAULT_FALLBACK_IMAGE_MODEL = 'gemini-2.5-flash-preview-05-20'
 
 function isRetryableNetworkError(err: unknown): boolean {
   if (err instanceof Error) {
@@ -142,6 +143,13 @@ function resolveAspectRatio(roomImageParts: { inlineData: { data: string; mimeTy
   const dims = getImageDimensionsFromDataUrl(dataUrl)
   if (!dims) return '16:9'
   return getAspectRatioForDimensions(dims.width, dims.height)
+}
+
+function resolveFallbackImageModel(primaryImageModel: string): string | null {
+  const configured = process.env.GEMINI_FALLBACK_IMAGE_MODEL?.trim()
+  const candidate = configured || DEFAULT_FALLBACK_IMAGE_MODEL
+  if (!candidate || candidate === primaryImageModel) return null
+  return candidate
 }
 
 /**
@@ -854,8 +862,9 @@ ABSOLUTE RULES:
       const stylePaletteBlock =
         !isExternal && (styleForImage || paletteForImage)
           ? `REQUIRED – APPLY BOTH IN THE OUTPUT:
-${styleForImage ? `- Design style: ${styleForImage.charAt(0).toUpperCase() + styleForImage.slice(1)}. The room must clearly look like this style (furniture, materials, mood).` : ''}
-${paletteForImage ? `- Color palette: ${paletteForImage} The image MUST visibly use these colors for walls, furniture, fabrics, rugs, and accents. Do not use a different color scheme.` : ''}
+${styleForImage ? `- Design style: ${styleForImage.charAt(0).toUpperCase() + styleForImage.slice(1)}. This style must be visually dominant and unmistakable in the final room image, with clear style-defining furniture shapes, materials, finishes, decor cues, and mood. Do NOT return a generic room with weak or subtle hints of the selected style.` : ''}
+${paletteForImage ? `- Color palette: ${paletteForImage} The image MUST visibly use these colors as the dominant palette for walls, furniture, fabrics, rugs, and accents. Do not use a different, muted, or generic color scheme.` : ''}
+- Validation requirement: if the selected style and selected color palette are not clearly visible in the final output, the result is wrong and must be regenerated.
 
 `
           : ''
@@ -894,7 +903,7 @@ ARCHITECTURE LOCK (MUST NOT CHANGE):
 INTERIOR CHANGES TO APPLY (furniture and decor only):
 ${reconfigSnippet || 'Reconfigure interior furniture and decor.'}
 
-RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensions). Only furniture, finishes, and decor may change. The output must show both the selected design style and the selected color palette clearly.`
+RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensions). Only furniture, finishes, and decor may change. The output must show both the selected design style and the selected color palette clearly and prominently, not subtly. If the chosen style is not obvious at first glance, the output is incorrect.`
     }
 
     // Always enforce high-fidelity output quality.
@@ -913,10 +922,10 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
     console.log('=== [Generate] Image Model Prompt End ===')
 
     // Step 3: Use image model to generate a new room image.
-    // Default primary stays Gemini 3 Pro preview; fallback to Imagen 4.0.
+    // Primary defaults to Gemini 3 Pro preview; fallback is configurable.
     // aspectRatio is only sent when the model supports it (see SUPPORT_ASPECT_RATIO_MODELS).
     const primaryImageModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
-    const fallbackImageModel = 'imagen-4.0-generate-001'
+    const fallbackImageModel = resolveFallbackImageModel(primaryImageModel)
     const aspectRatio = resolveAspectRatio(roomImageParts)
     // Some models (e.g. gemini-3-pro-image-preview, imagen-4.0-generate-001) may not support aspectRatio and return 400 if we send it.
     const SUPPORT_ASPECT_RATIO_MODELS = ['gemini-2.5-flash-preview-05-20', 'gemini-2.5-flash']
@@ -971,14 +980,15 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
         : [{ inlineData: comp.inlineData }]
     )
 
+    const templateLeadText =
+      roomImageParts.length > 1
+        ? 'TEMPLATE PHOTO EDIT — The very NEXT part is the LOCKED LAYOUT image that must remain the structural source of truth for the entire flow. If another room image appears after the instructions, treat it as the CURRENT RESULT / appearance reference only. Preserve geometry, camera, framing, crop, walls, openings, floor lines, ceiling lines, and overall layout from the first locked layout image, while carrying forward approved visual changes from the current-result reference except where the new instructions explicitly change them.\n\nOUTPUT = the SAME layout photograph: identical framing, camera, top/bottom/left/right crop, ceiling visible, full seating visible — ONLY the instructed style/material/color changes may differ.\n\nFORBIDDEN: changing room layout, re-shooting the room, zoom, tighter crop, new angle, stepping closer, or drifting away from the selected locked layout image.\n\n---\n\n'
+        : 'TEMPLATE PHOTO EDIT — The very NEXT part is the room image (your locked layout source).\n\nOUTPUT = this SAME photograph: identical framing, camera, top/bottom/left/right crop, ceiling visible, full seating visible — ONLY the surfaces named in the instructions AFTER the image change material/color/pattern.\n\nFORBIDDEN: re-shooting the room, zoom, tighter crop, new angle, stepping closer, less sofa or less ceiling than this image, or copying catalog/product photo framing.\n\n---\n\n'
+
     const imageModelUserParts: object[] = useImageAfterTemplateLead
       ? [
           {
-            text:
-              'TEMPLATE PHOTO EDIT — The very NEXT part is the room image (your current result).\n\n' +
-              'OUTPUT = this SAME photograph: identical framing, camera, top/bottom/left/right crop, ceiling visible, full seating visible — ONLY the surfaces named in the instructions AFTER the image change material/color/pattern.\n\n' +
-              'FORBIDDEN: re-shooting the room, zoom, tighter crop, new angle, stepping closer, less sofa or less ceiling than this image, or copying catalog/product photo framing.\n\n' +
-              '---\n\n',
+            text: templateLeadText,
           },
           { inlineData: roomImageParts[0].inlineData },
           { text: imageModelPrompt + '\n\n' + NO_LOGO_INSTRUCTION },
@@ -1098,20 +1108,44 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
       return await ensureImageMatchesInputSize(imageUrl, roomImageParts, sizeMatchOptions)
     }
 
-    // Fallback to Imagen 4.0 if primary (e.g. Gemini 3.0 Pro) did not work
-    console.log(`Primary image model (${primaryImageModel}) failed; trying fallback ${fallbackImageModel}.`)
-    let fallbackResult = await callImageModel(fallbackImageModel, imageRequestBody, { rejectUnexpectedSquare: true })
-    if (!fallbackResult.imageUrl && fallbackResult.rejectedSquare) {
-      console.log(`[Generate] Retrying ${fallbackImageModel} once with strict non-square framing constraint.`)
-      fallbackResult = await callImageModel(fallbackImageModel, strictShapeRequestBody, { rejectUnexpectedSquare: true })
-    }
-    imageUrl = fallbackResult.imageUrl
-    if (imageUrl) {
-      console.log('Fallback image model succeeded.')
-      if (useLockedLayoutOnly) {
-        return imageUrl
+    // If primary keeps returning square output for non-square source, accept one as
+    // a last resort and resize to input dimensions instead of falling back unchanged.
+    if (!imageUrl && primaryResult.rejectedSquare && needsNonSquareOutput) {
+      console.warn(
+        `[Generate] ${primaryImageModel} returned square outputs; accepting one and resizing to preserve generation flow.`
+      )
+      const acceptedSquare = await callImageModel(primaryImageModel, strictShapeRequestBody, {
+        rejectUnexpectedSquare: false,
+      })
+      if (acceptedSquare.imageUrl) {
+        if (useLockedLayoutOnly) {
+          return acceptedSquare.imageUrl
+        }
+        return await ensureImageMatchesInputSize(
+          acceptedSquare.imageUrl,
+          roomImageParts,
+          sizeMatchOptions
+        )
       }
-      return await ensureImageMatchesInputSize(imageUrl, roomImageParts, sizeMatchOptions)
+    }
+
+    if (fallbackImageModel) {
+      console.log(`Primary image model (${primaryImageModel}) failed; trying fallback ${fallbackImageModel}.`)
+      let fallbackResult = await callImageModel(fallbackImageModel, imageRequestBody, { rejectUnexpectedSquare: true })
+      if (!fallbackResult.imageUrl && fallbackResult.rejectedSquare) {
+        console.log(`[Generate] Retrying ${fallbackImageModel} once with strict non-square framing constraint.`)
+        fallbackResult = await callImageModel(fallbackImageModel, strictShapeRequestBody, { rejectUnexpectedSquare: true })
+      }
+      imageUrl = fallbackResult.imageUrl
+      if (imageUrl) {
+        console.log('Fallback image model succeeded.')
+        if (useLockedLayoutOnly) {
+          return imageUrl
+        }
+        return await ensureImageMatchesInputSize(imageUrl, roomImageParts, sizeMatchOptions)
+      }
+    } else {
+      console.log(`Primary image model (${primaryImageModel}) failed; no distinct fallback model configured.`)
     }
 
     // Both failed: retry with minimal prompts using fallback model
@@ -1130,32 +1164,36 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
       ? `${DESIGN_CONTEXT_PREFIX}Restyle the exterior of the building in the uploaded image. Keep the building structure identical. Only change colors, materials, and landscaping.`
       : `${DESIGN_CONTEXT_PREFIX}Redecorate the interior of the room in the uploaded image. Keep the room structure (walls, floor, ceiling, doors, windows) identical. Only change furniture and decor.`
 
-    const retry1 = await tryImageModel(
-      [{ text: minimalPrompt }, { inlineData: roomImageParts[0].inlineData }],
-      fallbackImageModel
-    )
-    if (retry1) {
-      console.log('Retry 1 (minimal prompt, fallback model) succeeded.')
-      if (useLockedLayoutOnly) {
-        return retry1
+    if (fallbackImageModel) {
+      const retry1 = await tryImageModel(
+        [{ text: minimalPrompt }, { inlineData: roomImageParts[0].inlineData }],
+        fallbackImageModel
+      )
+      if (retry1) {
+        console.log('Retry 1 (minimal prompt, fallback model) succeeded.')
+        if (useLockedLayoutOnly) {
+          return retry1
+        }
+        return await ensureImageMatchesInputSize(retry1, roomImageParts, sizeMatchOptions)
       }
-      return await ensureImageMatchesInputSize(retry1, roomImageParts, sizeMatchOptions)
     }
 
     const barePrompt = isExternal
       ? 'Apply a fresh exterior style to this building. Keep the structure the same.'
       : 'Redesign the interior of this room with modern furniture. Keep walls, floor, and ceiling the same.'
 
-    const retry2 = await tryImageModel(
-      [{ text: barePrompt }, { inlineData: roomImageParts[0].inlineData }],
-      fallbackImageModel
-    )
-    if (retry2) {
-      console.log('Retry 2 (bare prompt, fallback model) succeeded.')
-      if (useLockedLayoutOnly) {
-        return retry2
+    if (fallbackImageModel) {
+      const retry2 = await tryImageModel(
+        [{ text: barePrompt }, { inlineData: roomImageParts[0].inlineData }],
+        fallbackImageModel
+      )
+      if (retry2) {
+        console.log('Retry 2 (bare prompt, fallback model) succeeded.')
+        if (useLockedLayoutOnly) {
+          return retry2
+        }
+        return await ensureImageMatchesInputSize(retry2, roomImageParts, sizeMatchOptions)
       }
-      return await ensureImageMatchesInputSize(retry2, roomImageParts, sizeMatchOptions)
     }
 
     console.warn('All image model attempts failed. Falling back to base image.')
@@ -1238,6 +1276,7 @@ export async function POST(request: NextRequest) {
       configType = 'internal',
       images,
       currentResultImage,
+      layoutAnchorImage,
       componentReferenceImages,
       componentReferenceLabels,
       configMode,
@@ -1293,19 +1332,30 @@ export async function POST(request: NextRequest) {
     const effectiveShuffle = (shuffle || false) || isStyleOnlyReconfigure
 
     const minImages = 4
+    const explicitLayoutAnchorImage =
+      typeof layoutAnchorImage === 'string' && layoutAnchorImage.trim().length > 0
+        ? layoutAnchorImage.trim()
+        : null
     const lockedLayoutImage =
-      Array.isArray(images) &&
+      explicitLayoutAnchorImage ??
+      (Array.isArray(images) &&
       typeof layoutImageIndex === 'number' &&
       layoutImageIndex >= 0 &&
       layoutImageIndex < images.length
         ? images[layoutImageIndex]
-        : null
+        : null)
     const hasLayoutAnchor = typeof lockedLayoutImage === 'string' && lockedLayoutImage.length > 0
 
     // Keep the selected layout image as the ONLY structural source throughout the flow.
     // This prevents layout/camera drift when users regenerate after editing.
+    const currentResultTrimmed =
+      typeof currentResultImage === 'string' && currentResultImage.trim().length > 0
+        ? currentResultImage.trim()
+        : null
     let imagesForGeneration: string[] = Array.isArray(images) ? images : []
-    if (hasLayoutAnchor) {
+    if (hasLayoutAnchor && currentResultTrimmed && currentResultTrimmed !== lockedLayoutImage && (isCustomizationMode || isStyleOnlyReconfigure)) {
+      imagesForGeneration = [lockedLayoutImage!, currentResultTrimmed]
+    } else if (hasLayoutAnchor) {
       imagesForGeneration = [lockedLayoutImage!]
     } else if ((isCustomizationMode || isStyleOnlyReconfigure) && typeof currentResultImage === 'string') {
       imagesForGeneration = [currentResultImage]
@@ -1413,7 +1463,7 @@ export async function POST(request: NextRequest) {
             '- No text, logos, or labels in the output.\n\n' +
             'If in doubt, change fewer pixels — only inside white.'
         const primaryImageModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
-        const fallbackImageModel = 'imagen-4.0-generate-001'
+        const fallbackImageModel = resolveFallbackImageModel(primaryImageModel)
         const roomImagePartsForErase = [{ inlineData: { data: sourceBuffer.toString('base64'), mimeType: sourceMime } }]
         const inpaintingBody = JSON.stringify({
           contents: [
@@ -1444,21 +1494,25 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ imageUrl: dataUrl })
           }
         }
-        console.warn('Erase inpainting: primary model failed, trying fallback.')
-        const res2 = await fetchGemini(
-          `https://generativelanguage.googleapis.com/v1beta/models/${fallbackImageModel}:generateContent?key=${geminiApiKey}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: inpaintingBody },
-          GEMINI_IMAGE_TIMEOUT_MS
-        )
-        if (res2.ok) {
-          const data = await res2.json()
-          const part = data.candidates?.[0]?.content?.parts?.find((p: { inlineData?: { data: string; mimeType?: string } }) => p.inlineData?.data)
-          if (part?.inlineData?.data) {
-            const mime = part.inlineData.mimeType || 'image/png'
-            let dataUrl = `data:${mime};base64,${part.inlineData.data}`
-            dataUrl = await ensureImageMatchesInputSize(dataUrl, roomImagePartsForErase)
-            return NextResponse.json({ imageUrl: dataUrl })
+        if (fallbackImageModel) {
+          console.warn(`Erase inpainting: primary model failed, trying fallback ${fallbackImageModel}.`)
+          const res2 = await fetchGemini(
+            `https://generativelanguage.googleapis.com/v1beta/models/${fallbackImageModel}:generateContent?key=${geminiApiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: inpaintingBody },
+            GEMINI_IMAGE_TIMEOUT_MS
+          )
+          if (res2.ok) {
+            const data = await res2.json()
+            const part = data.candidates?.[0]?.content?.parts?.find((p: { inlineData?: { data: string; mimeType?: string } }) => p.inlineData?.data)
+            if (part?.inlineData?.data) {
+              const mime = part.inlineData.mimeType || 'image/png'
+              let dataUrl = `data:${mime};base64,${part.inlineData.data}`
+              dataUrl = await ensureImageMatchesInputSize(dataUrl, roomImagePartsForErase)
+              return NextResponse.json({ imageUrl: dataUrl })
+            }
           }
+        } else {
+          console.warn('Erase inpainting: primary model failed and no distinct fallback model configured.')
         }
       } catch (err) {
         console.error('Erase inpainting failed:', err)

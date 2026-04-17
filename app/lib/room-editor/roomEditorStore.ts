@@ -286,7 +286,6 @@ export const useRoomEditorStore = create<RoomEditorState & RoomEditorActions>((s
       editPendingVariation,
       editSelectedItemId,
       editDetectedSlugs,
-      selection: existingSel,
     } = get()
     if (!workingImage || !editSelectedItemId) return
 
@@ -294,32 +293,13 @@ export const useRoomEditorStore = create<RoomEditorState & RoomEditorActions>((s
     const item = list.find((i) => i.id === editSelectedItemId)
     if (!item) return
 
-    const isFullFrame = (b: Selection['boundingBox']) =>
-      b.x === 0 && b.y === 0 && b.width === 1 && b.height === 1
+    const mask = await createFullWhiteMaskDataUrl(workingImage)
+    if (!mask) return
 
-    const keepDrawnRegion =
-      existingSel?.maskDataUrl &&
-      existingSel.boundingBox &&
-      !isFullFrame(existingSel.boundingBox)
-
-    let nextSelection: Selection
-    if (keepDrawnRegion) {
-      nextSelection = {
-        type: existingSel!.type,
-        boundingBox: existingSel!.boundingBox,
-        maskDataUrl: existingSel!.maskDataUrl,
-        objectType: existingSel!.objectType,
-        cutoutDataUrl: existingSel!.cutoutDataUrl,
-        regionPx: existingSel!.regionPx,
-      }
-    } else {
-      const mask = await createFullWhiteMaskDataUrl(workingImage)
-      if (!mask) return
-      nextSelection = {
-        type: 'area',
-        boundingBox: { x: 0, y: 0, width: 1, height: 1 },
-        maskDataUrl: mask,
-      }
+    const nextSelection: Selection = {
+      type: 'area',
+      boundingBox: { x: 0, y: 0, width: 1, height: 1 },
+      maskDataUrl: mask,
     }
 
     if (editAttributeTab === 'ai') {

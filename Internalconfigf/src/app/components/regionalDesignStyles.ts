@@ -107,7 +107,7 @@ export const REGIONAL_STYLES: RegionalStyleEntry[] = [
     id: 'latin-american',
     name: 'Latin American',
     category: 'western',
-    img: `https://images.unsplash.com/photo-1615529328331-f8917597711f?${q}`,
+    img: '/api/regional-style-image/latin-american',
     gradient: 'linear-gradient(135deg, #c45c26 0%, #2d8b57 50%, #f4d03f 100%)',
   },
   {
@@ -135,7 +135,7 @@ export const REGIONAL_STYLES: RegionalStyleEntry[] = [
     id: 'french',
     name: 'French',
     category: 'western',
-    img: `https://images.unsplash.com/photo-1503602646848-7fce86168456?${q}`,
+    img: '/api/regional-style-image/french',
     gradient: 'linear-gradient(135deg, #2c2c2c 0%, #d4c4b0 50%, #8b7355 100%)',
   },
   {
@@ -150,14 +150,14 @@ export const REGIONAL_STYLES: RegionalStyleEntry[] = [
     id: 'turkish',
     name: 'Turkish',
     category: 'middle-eastern',
-    img: `https://images.unsplash.com/photo-1615874959474-d60996920d3c?${q}`,
+    img: '/api/regional-style-image/turkish',
     gradient: 'linear-gradient(135deg, #1a252f 0%, #c9a227 50%, #8b2500 100%)',
   },
   {
     id: 'moroccan',
     name: 'Moroccan',
     category: 'middle-eastern',
-    img: `https://images.unsplash.com/photo-1570074069563-f61bee4cef75?${q}`,
+    img: '/api/regional-style-image/moroccan',
     gradient: 'linear-gradient(135deg, #0d3b2c 0%, #c9a227 50%, #8b2500 100%)',
   },
   {
@@ -186,7 +186,7 @@ export const REGIONAL_STYLES: RegionalStyleEntry[] = [
     id: 'chinese',
     name: 'Chinese',
     category: 'eastern',
-    img: `https://images.unsplash.com/photo-1598928500861-e419cdb1b97b?${q}`,
+    img: '/api/regional-style-image/chinese',
     gradient: 'linear-gradient(135deg, #8b0000 0%, #d4af37 50%, #1a1a1a 100%)',
   },
   {

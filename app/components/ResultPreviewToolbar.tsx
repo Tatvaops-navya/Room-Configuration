@@ -117,8 +117,8 @@ export default function ResultPreviewToolbar({
         />
         <ToolbarAction icon="↗" label="Share" onClick={onShare} disabled={shareDisabled} />
         <ToolbarAction
-          icon={liked ? '♥' : '♡'}
-          label="Like"
+          icon={<span style={{ color: liked ? '#ef4444' : 'currentColor' }}>{liked ? '♥' : '♡'}</span>}
+          label={liked ? 'Liked' : 'Like'}
           onClick={onToggleLike}
           disabled={likeDisabled}
           active={liked}

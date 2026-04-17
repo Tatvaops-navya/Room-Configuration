@@ -198,6 +198,7 @@ export const EXACT_CATALOG_OBJECT_INSTRUCTION =
 export async function postCustomizationGenerate(opts: {
   configType: 'internal' | 'external'
   currentResultImage: string
+  layoutAnchorImage?: string | null
   customizationStyles: Record<string, string>
   customizationLabels: Record<string, CustomizationLabelEntry>
   selectedStyle?: string
@@ -212,6 +213,22 @@ export async function postCustomizationGenerate(opts: {
     return { error: 'Nothing selected to apply.' }
   }
 
+  const layoutAnchor = opts.layoutAnchorImage?.trim() || cur
+  const optimizedLayoutAnchor =
+    layoutAnchor && layoutAnchor.includes(',')
+      ? await optimizeImageDataUrlForApi(layoutAnchor, {
+          maxDimension: 1400,
+          quality: 0.82,
+        })
+      : layoutAnchor
+  const optimizedCurrentResult =
+    cur && cur.includes(',')
+      ? await optimizeImageDataUrlForApi(cur, {
+          maxDimension: 1400,
+          quality: 0.82,
+        })
+      : cur
+
   let res: Response
   try {
     res = await fetch(buildApiUrl('/api/generate'), {
@@ -220,9 +237,9 @@ export async function postCustomizationGenerate(opts: {
       body: JSON.stringify({
         configType: opts.configType,
         configMode: 'customization',
-        images: [cur],
+        images: [optimizedLayoutAnchor || layoutAnchor],
         layoutImageIndex: 0,
-        currentResultImage: cur,
+        currentResultImage: optimizedCurrentResult || cur,
         customizationStyles: opts.customizationStyles,
         customizationLabels: opts.customizationLabels,
         vastuEnabled: false,
@@ -527,7 +544,7 @@ export async function createMaskFromBoundingBox(
   })
 }
 
-/** Masked inpaint add — same as `app/lib/room-editor/roomEditorApi.ts` → `POST /api/add`. */
+/** Masked inpaint add — intentionally routed through the same edit path (`POST /api/edit`). */
 export async function postRoomAdd(opts: {
   imageDataUrl: string
   maskDataUrl: string
@@ -544,7 +561,8 @@ export async function postRoomAdd(opts: {
     ref && ref.includes(',') && ref.length > 32 ? ref : undefined
   let res: Response
   try {
-    res = await fetch(buildApiUrl('/api/add'), {
+    // Add should use the same placement logic as Edit; only mask differs (user-selected area).
+    res = await fetch(buildApiUrl('/api/edit'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -580,14 +598,14 @@ export async function postRoomAdd(opts: {
 
 /**
  * Same phrase as `app/lib/room-editor/replacePrompt.ts` / `runRoomEditorPreview` when mode === 'replace'.
- * Gemini route still adds full inpaint instructions; this is the user "Replace with:" line.
+ * Keep it aligned with edit-style inpaint wording so replace uses the same scene integration logic.
  */
 export function buildReplaceWithPhrase(description?: string | null, presetId?: string | null): string {
   const t = description?.trim() || presetId?.trim() || 'similar object'
-  return `Replace with: ${t}`
+  return `Change only the selected object in this interior photo to match this specification: ${t}. Keep every other surface, object, layout, and lighting unchanged. Photorealistic, seamless blend.`
 }
 
-/** Masked inpaint replace — same as `app/lib/room-editor/roomEditorApi.ts` → `POST /api/replace`. */
+/** Masked inpaint replace — intentionally routed through the same edit path (`POST /api/edit`). */
 export async function postRoomReplace(opts: {
   imageDataUrl: string
   maskDataUrl: string
@@ -607,7 +625,8 @@ export async function postRoomReplace(opts: {
   }
   let res: Response
   try {
-    res = await fetch(buildApiUrl('/api/replace'), {
+    // Replace should use the same placement logic as Edit; only the mask differs.
+    res = await fetch(buildApiUrl('/api/edit'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -686,15 +705,19 @@ export async function ensureGenerateImageDataUrl(src: string): Promise<string | 
   }
   if (s.startsWith('http://') || s.startsWith('https://')) {
     try {
-      const res = await fetch(s)
-      if (!res.ok) return { error: 'Could not load image. Try again after the room image loads.' }
-      const blob = await res.blob()
-      return await new Promise<string>((resolve, reject) => {
-        const r = new FileReader()
-        r.onload = () => resolve(r.result as string)
-        r.onerror = () => reject(new Error('read failed'))
-        r.readAsDataURL(blob)
-      })
+      // Browser fetch to third-party image hosts often fails due to CORS.
+      // Route via backend so server-side fetch can convert to data URL.
+      const proxyUrl = buildApiUrl(`/api/fetch-image-data-url?url=${encodeURIComponent(s)}`)
+      const res = await fetch(proxyUrl)
+      const data = (await res.json().catch(() => ({}))) as { dataUrl?: string; error?: string }
+      if (!res.ok || typeof data.dataUrl !== 'string') {
+        return {
+          error:
+            data.error ||
+            'Could not load image. Try again after the room image loads.',
+        }
+      }
+      return data.dataUrl
     } catch {
       return {
         error:
@@ -794,13 +817,12 @@ export async function postRoomGenerate(
   // the layout anchor, so uploading all room shots only increases payload size and
   // causes Vercel 413 errors on production requests.
   const selectedLayoutImage = imagesDataUrl[idx]
-  const baseRoomImage = useCurrent ? cur ?? selectedLayoutImage : selectedLayoutImage
-  const [optimizedBaseRoomImage] = await optimizeImageListForApi([baseRoomImage], {
+  const [optimizedBaseRoomImage] = await optimizeImageListForApi([selectedLayoutImage], {
     limit: 1,
     maxDimension: 1400,
     quality: 0.82,
   })
-  const imagesPayload = optimizedBaseRoomImage ? [optimizedBaseRoomImage] : [baseRoomImage]
+  const imagesPayload = optimizedBaseRoomImage ? [optimizedBaseRoomImage] : [selectedLayoutImage]
   const layoutIndexPayload = 0
   const fullRoomAdditionalText = buildFullRoomAdditionalText(session)
   const normalizedPurposeInput = session.roomContext?.trim()

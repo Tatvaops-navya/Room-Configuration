@@ -1,16 +1,14 @@
+import { EDIT_INPAINT_CLOSURE } from './editCatalogPrompt'
+
 /**
- * Masked replace user instruction — same wording as `buildPreviewPrompt` when `mode === 'replace'`
- * in `runRoomEditorPreview.ts` (preset label / custom text / preset id fallback).
+ * Same structure as catalog edit (`buildEditCatalogPrompt`): change one target to a specification,
+ * then the shared `EDIT_INPAINT_CLOSURE`. Replace differs only by using the user-drawn mask (where)
+ * instead of a full-frame mask.
  */
 export function buildReplaceWithPhrase(
   description?: string | null,
   presetId?: string | null
 ): string {
   const t = description?.trim() || presetId?.trim() || 'a similar object'
-  return [
-    `Replace only the selected object with ${t}`,
-    'Keep the original camera, composition, and furniture positions unchanged',
-    'Match the existing room style, color palette, lighting, and shadows',
-    'Do not change background walls, floor, ceiling, or other furniture outside the selection mask',
-  ].join('. ')
+  return `Change only the selected object in this interior photo to match this specification: ${t}. ${EDIT_INPAINT_CLOSURE}`
 }

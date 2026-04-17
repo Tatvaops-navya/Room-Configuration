@@ -4,10 +4,11 @@ import { useRef, useState, useCallback } from 'react'
 import { useRoomEditorStore } from '@/app/lib/room-editor/roomEditorStore'
 import type { BoundingBox, EditorMode } from '@/app/lib/room-editor/types'
 import { createMaskFromBoundingBox } from '@/app/lib/room-editor/maskUtils'
+import { extractFromRegion } from '@/app/lib/room-editor/extractionApi'
 
 const CURSOR_BY_MODE: Record<EditorMode, string> = {
   idle: 'default',
-  edit: 'crosshair',
+  edit: 'default',
   add: 'crosshair',
   replace: 'crosshair',
   erase: 'crosshair',
@@ -15,7 +16,7 @@ const CURSOR_BY_MODE: Record<EditorMode, string> = {
 
 const CURSOR_LABEL: Record<EditorMode, string> = {
   idle: '',
-  edit: 'Drag to select area',
+  edit: '',
   add: 'Drag to place object',
   replace: 'Drag around object',
   erase: 'Drag to remove area',
@@ -99,16 +100,50 @@ export default function CanvasInteraction({
     const boundingBox: BoundingBox = { x, y, width, height }
 
     const modeAtCommit = useRoomEditorStore.getState().mode
-    const maskDataUrl = await createMaskFromBoundingBox(imageSrc, boundingBox, {
-      ...(modeAtCommit === 'add' ? { autoFeatherForAdd: true } : {}),
-    })
-    if (maskDataUrl) {
-      setSelection({
-        type: 'area',
-        boundingBox,
-        maskDataUrl,
-      })
-      onSelectionComplete?.(boundingBox, maskDataUrl)
+    const img = imgRef.current
+    const imageWidth = img?.naturalWidth ?? 0
+    const imageHeight = img?.naturalHeight ?? 0
+
+    if (modeAtCommit === 'replace' && imageWidth > 0 && imageHeight > 0) {
+      try {
+        const regionPx = {
+          x: Math.max(0, Math.round(x * imageWidth)),
+          y: Math.max(0, Math.round(y * imageHeight)),
+          width: Math.max(1, Math.round(width * imageWidth)),
+          height: Math.max(1, Math.round(height * imageHeight)),
+        }
+        const extracted = await extractFromRegion(imageSrc, regionPx, imageWidth, imageHeight)
+        setSelection({
+          type: 'object',
+          boundingBox: extracted.boundingBox,
+          maskDataUrl: extracted.maskDataUrl,
+          cutoutDataUrl: extracted.cutoutDataUrl,
+          regionPx: extracted.regionPx,
+        })
+        onSelectionComplete?.(extracted.boundingBox, extracted.maskDataUrl)
+      } catch {
+        const maskDataUrl = await createMaskFromBoundingBox(imageSrc, boundingBox)
+        if (maskDataUrl) {
+          setSelection({
+            type: 'area',
+            boundingBox,
+            maskDataUrl,
+          })
+          onSelectionComplete?.(boundingBox, maskDataUrl)
+        }
+      }
+    } else {
+      // Keep Add mask behavior aligned with Edit/Replace placement quality:
+      // use a direct box mask (no add-only auto feather).
+      const maskDataUrl = await createMaskFromBoundingBox(imageSrc, boundingBox)
+      if (maskDataUrl) {
+        setSelection({
+          type: 'area',
+          boundingBox,
+          maskDataUrl,
+        })
+        onSelectionComplete?.(boundingBox, maskDataUrl)
+      }
     }
 
     setIsDrawing(false)
@@ -118,7 +153,7 @@ export default function CanvasInteraction({
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (mode === 'idle') return
+      if (mode === 'idle' || mode === 'edit') return
       const pt = clientToNormalized(e.clientX, e.clientY)
       if (!pt) return
       e.preventDefault()
