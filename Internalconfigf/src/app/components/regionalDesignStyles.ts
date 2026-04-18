@@ -135,7 +135,7 @@ export const REGIONAL_STYLES: RegionalStyleEntry[] = [
     id: 'french',
     name: 'French',
     category: 'western',
-    img: '/api/regional-style-image/french',
+    img: `https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?${q}`,
     gradient: 'linear-gradient(135deg, #2c2c2c 0%, #d4c4b0 50%, #8b7355 100%)',
   },
   {
