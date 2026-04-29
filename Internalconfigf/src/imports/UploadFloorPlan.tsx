@@ -3,11 +3,10 @@ import svgPathsFigma from "./svg-zajpvgtcjc";
 import svgPathsInterior from "./svg-5r0w3ksay9";
 import imgContainer from "figma:asset/cbb61108720d04d2ff8d142ee51098e6c2f1f1ef.png";
 import imgImage from "figma:asset/4e65f32928ec1c24c3d2480d067ce09ec48a2ae5.png";
-import imgImageRobot from "figma:asset/6854101e0adfcbe57d7b01a404b895b405fd650c.png";
 import { imgVector } from "./svg-ba9mt";
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { LayoutDashboard, Building2 } from 'lucide-react';
+import { LayoutDashboard, Building2, Menu, X, Home, Trophy, FolderKanban, Sparkles, Images, Headset, Phone, Mail, MessageCircle, ChevronRight, ChevronDown, User, Settings, Gem, CreditCard, Gift, CircleHelp, Info, LogOut, ArrowLeft, ArrowRight, Bell, MoreVertical, MapPin, Lightbulb, Bookmark, Grid2x2, Plus, Camera, Tag, SlidersHorizontal, Trash2, Search, AtSign, Bot, BellRing, Eye, Moon, Languages, ExternalLink, HelpCircle, FileText, Shield, Funnel, Grid3x3, Upload } from 'lucide-react';
 import { RoomConfigStudio } from '../app/components/RoomConfigStudio';
 import { DEFAULT_REGIONAL_STYLE_NAME } from '../app/components/regionalDesignStyles';
 import { AppHeader } from '../app/components/AppHeader';
@@ -20,9 +19,62 @@ import {
   type RoomWizardSession,
 } from '../lib/roomGenerateApi';
 import { applyWatermarkToImage } from '../lib/tatvaWatermark';
+import { buildApiUrl } from '../lib/apiUrl';
 
 /** Same as `app/page.tsx` MAX_GENERATION_HISTORY */
 const MAX_GENERATION_HISTORY = 20;
+const PROFILE_POSTS_STORAGE_KEY = 'tatvaops.profilePosts.v1';
+
+/** Must match Next `app/home/page.tsx` — same persisted session shape. */
+const SPACIA_TOKEN_KEY = 'spacia.token';
+const SPACIA_OTP_VERIFIED_KEY = 'spacia.otpVerified';
+
+function isSpaciaLoggedIn(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return Boolean(window.localStorage.getItem(SPACIA_TOKEN_KEY)?.trim())
+      || window.localStorage.getItem(SPACIA_OTP_VERIFIED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Called after OTP verify succeeds; stores JWT if present so we skip onboarding on restart. */
+function persistSpaciaSessionAfterVerify(payload: unknown): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const body =
+      payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+    let token: string | undefined;
+    const tTop = body.token;
+    if (typeof tTop === 'string' && tTop.trim()) token = tTop.trim();
+    if (!token && body.data !== null && typeof body.data === 'object') {
+      const d = body.data as Record<string, unknown>;
+      if (typeof d.token === 'string' && d.token.trim()) token = d.token.trim();
+      else if (typeof (d as { accessToken?: string }).accessToken === 'string') {
+        const v = String((d as { accessToken: string }).accessToken).trim();
+        if (v) token = v;
+      } else if (typeof (d as { jwt?: string }).jwt === 'string') {
+        const v = String((d as { jwt: string }).jwt).trim();
+        if (v) token = v;
+      }
+    }
+    if (token) window.localStorage.setItem(SPACIA_TOKEN_KEY, token);
+    else window.localStorage.setItem(SPACIA_OTP_VERIFIED_KEY, '1');
+  } catch {
+    // ignore
+  }
+}
+
+function clearSpaciaSession(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(SPACIA_TOKEN_KEY);
+    window.localStorage.removeItem(SPACIA_OTP_VERIFIED_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 function Container3() {
   return (
@@ -47,23 +99,27 @@ function Container4() {
 function Paragraph() {
   return (
     <div className="absolute h-[24px] left-[490px] opacity-80 top-0 w-[220px]" data-name="Paragraph">
-      <p className="-translate-x-1/2 absolute font-['Inter:Medium',sans-serif] font-medium leading-[24px] left-1/2 not-italic text-[#f4f0e6] text-[16px] text-center top-[-1px] whitespace-nowrap">Let Your Soul Find Its</p>
+      <p className="-translate-x-1/2 absolute font-['Inter:Medium',sans-serif] font-medium leading-[24px] left-1/2 not-italic text-[#f4f0e6] text-[16px] text-center top-[-1px] whitespace-nowrap"></p>
     </div>
   );
 }
 
 function Heading() {
   return (
-    <div className="absolute h-[102px] left-0 top-0 w-[318.813px]" data-name="Heading 1">
-      <p className="absolute font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[102px] left-0 not-italic text-[#f4f0e6] text-[102px] top-0">Happy</p>
+    <div className="absolute h-[102px] left-0 top-0 w-full" data-name="Heading 1">
+      <p className="-translate-x-1/2 absolute font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[92px] left-1/2 not-italic text-[#f4f0e6] text-[92px] top-0 whitespace-nowrap">
+        What would you like
+      </p>
     </div>
   );
 }
 
 function Heading1() {
   return (
-    <div className="absolute h-[102px] left-0 top-0 w-[307.922px]" data-name="Heading 1">
-      <p className="absolute font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[102px] left-0 not-italic text-[#f4f0e6] text-[102px] top-0">Space</p>
+    <div className="absolute h-[102px] left-0 top-0 w-full" data-name="Heading 1">
+      <p className="-translate-x-1/2 absolute font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[92px] left-1/2 not-italic text-[#f4f0e6] text-[92px] top-0 whitespace-nowrap">
+        to imagine?
+      </p>
     </div>
   );
 }
@@ -138,47 +194,19 @@ function Icon3() {
 
 function Container7() {
   return (
-    <div className="absolute h-[102px] left-[334.81px] top-0 w-[307.922px]" data-name="Container">
+    <div className="absolute h-[102px] left-0 top-0 w-full" data-name="Container">
       <Heading1 />
-      <div className="focus-frame-animation">
-        <Icon />
-        <Icon1 />
-        <Icon2 />
-        <Icon3 />
-      </div>
-      <style>{`
-        @keyframes focusFramePulse {
-          0% {
-            opacity: 0.85;
-            transform: scale(1);
-            filter: drop-shadow(0 0 0px rgba(255, 255, 255, 0));
-          }
-          50% {
-            opacity: 1;
-            transform: scale(1.02);
-            filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.20));
-          }
-          100% {
-            opacity: 0.85;
-            transform: scale(1);
-            filter: drop-shadow(0 0 0px rgba(255, 255, 255, 0));
-          }
-        }
-        
-        .focus-frame-animation {
-          animation: focusFramePulse 2400ms ease-in-out infinite;
-          transform-origin: center center;
-        }
-      `}</style>
     </div>
   );
 }
 
 function Container6() {
   return (
-    <div className="absolute h-[102px] left-[278.63px] top-[68px] w-[642.734px]" data-name="Container">
+    <div className="absolute h-[204px] left-0 top-[84px] w-[1200px]" data-name="Container">
       <Heading />
-      <Container7 />
+      <div className="absolute left-0 top-[102px] w-full h-[102px]">
+        <Container7 />
+      </div>
     </div>
   );
 }
@@ -186,7 +214,7 @@ function Container6() {
 function Paragraph1() {
   return (
     <div className="h-[27px] relative shrink-0 w-full" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full">Creating</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full"></p>
     </div>
   );
 }
@@ -194,7 +222,7 @@ function Paragraph1() {
 function Paragraph2() {
   return (
     <div className="h-[27px] relative shrink-0 w-full" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full">modern</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full"></p>
     </div>
   );
 }
@@ -213,7 +241,7 @@ function Container9() {
 function Paragraph3() {
   return (
     <div className="h-[27px] relative shrink-0 w-full" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full">timeless interiors</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full"></p>
     </div>
   );
 }
@@ -221,7 +249,7 @@ function Paragraph3() {
 function Paragraph4() {
   return (
     <div className="h-[27px] relative shrink-0 w-full" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full">that blend</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full"></p>
     </div>
   );
 }
@@ -240,7 +268,7 @@ function Container10() {
 function Paragraph5() {
   return (
     <div className="h-[27px] relative shrink-0 w-full" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full">comfort, beauty,</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full"></p>
     </div>
   );
 }
@@ -248,7 +276,7 @@ function Paragraph5() {
 function Paragraph6() {
   return (
     <div className="h-[27px] relative shrink-0 w-full" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full">and purpose</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[27px] not-italic text-white text-[19px] text-center w-full"></p>
     </div>
   );
 }
@@ -300,7 +328,7 @@ function Container14() {
 function Heading2() {
   return (
     <div className="absolute content-stretch flex h-[18px] items-start left-[55.92px] top-[56px] w-[130.156px]" data-name="Heading 3">
-      <p className="font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[18px] not-italic relative shrink-0 text-[14px] text-center text-white tracking-[-0.28px]">Room Configuration</p>
+      <p className="font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[18px] not-italic relative shrink-0 text-[14px] text-center text-white tracking-[-0.28px]">Imagine your full house</p>
     </div>
   );
 }
@@ -308,7 +336,7 @@ function Heading2() {
 function Paragraph7() {
   return (
     <div className="absolute h-[28px] left-[22px] opacity-60 top-[78px] w-[198px]" data-name="Paragraph">
-      <p className="-translate-x-1/2 absolute font-['Inter:Regular',sans-serif] font-normal leading-[14px] left-[99.39px] not-italic text-[11px] text-center text-white top-0 tracking-[-0.11px] w-[185px] whitespace-pre-wrap">Define room types, sizes, and layout preferences</p>
+      <p className="-translate-x-1/2 absolute font-['Inter:Regular',sans-serif] font-normal leading-[14px] left-[99.39px] not-italic text-[11px] text-center text-white top-0 tracking-[-0.11px] w-[185px] whitespace-pre-wrap">Upload your floor plan (PDF or image). We won't go further from here yet.</p>
     </div>
   );
 }
@@ -371,7 +399,7 @@ function Container17() {
 function Heading3() {
   return (
     <div className="absolute content-stretch flex h-[18px] items-start left-[64.05px] top-[56px] w-[113.906px]" data-name="Heading 3">
-      <p className="font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[18px] not-italic relative shrink-0 text-[14px] text-center text-white tracking-[-0.28px]">Upload Floor Plan</p>
+      <p className="font-['Inter:Semi_Bold',sans-serif] font-semibold leading-[18px] not-italic relative shrink-0 text-[14px] text-center text-white tracking-[-0.28px]">Imagine your room</p>
     </div>
   );
 }
@@ -379,7 +407,7 @@ function Heading3() {
 function Paragraph8() {
   return (
     <div className="absolute content-stretch flex h-[14px] items-start left-[28.27px] opacity-60 top-[78px] w-[185.469px]" data-name="Paragraph">
-      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[14px] not-italic relative shrink-0 text-[11px] text-center text-white tracking-[-0.11px]">Upload your floor plan to get started</p>
+      <p className="font-['Inter:Regular',sans-serif] font-normal leading-[14px] not-italic relative shrink-0 text-[11px] text-center text-white tracking-[-0.11px]">Next choose Internal or External, then upload room photos.</p>
     </div>
   );
 }
@@ -388,15 +416,19 @@ function Container18() {
   return <div className="absolute h-[24px] left-[121px] top-[110px] w-0" data-name="Container" />;
 }
 
-function Button1() {
+function Button1({ onClick }: { onClick?: () => void }) {
   return (
-    <div className="absolute bg-[rgba(255,255,255,0.12)] h-[40px] left-[61px] rounded-[10px] top-[132px] w-[120px] flex items-center justify-center" data-name="Button">
+    <div
+      onClick={onClick}
+      className="absolute bg-[rgba(255,255,255,0.12)] h-[40px] left-[61px] rounded-[10px] top-[132px] w-[120px] flex items-center justify-center cursor-pointer hover:bg-[rgba(255,255,255,0.18)] transition-colors duration-200"
+      data-name="Button"
+    >
       <p className="font-['Inter:Medium',sans-serif] font-medium leading-[13px] not-italic text-[13px] text-center text-white">Get Started</p>
     </div>
   );
 }
 
-function UploadFloorPlanCard() {
+function UploadFloorPlanCard({ onClick }: { onClick?: () => void }) {
   return (
     <div className="bg-[rgba(255,255,255,0.035)] backdrop-blur-[7px] border border-[rgba(255,255,255,0.15)] border-solid h-[200px] rounded-[14px] shadow-[0px_0px_0px_1px_rgba(0,0,0,0.1),0px_6px_20px_0px_rgba(0,0,0,0.18)] w-[244px] transition-all duration-200 ease-out cursor-pointer relative overflow-visible origin-center hover:scale-[1.04] hover:translate-y-[-2px] hover:border-[rgba(255,255,255,0.22)] hover:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.1),0px_14px_32px_0px_rgba(0,0,0,0.26)]" data-name="Container">
       <div className="absolute inset-0 bg-gradient-to-b from-[rgba(255,255,255,0.08)] to-transparent opacity-0 hover:opacity-100 transition-opacity duration-200 ease-out pointer-events-none rounded-[14px]" style={{ height: '40px' }} />
@@ -404,21 +436,21 @@ function UploadFloorPlanCard() {
       <Heading3 />
       <Paragraph8 />
       <Container18 />
-      <Button1 />
+      <Button1 onClick={onClick} />
     </div>
   );
 }
 
-function Container16() {
-  return <UploadFloorPlanCard />;
+function Container16({ onClick }: { onClick?: () => void }) {
+  return <UploadFloorPlanCard onClick={onClick} />;
 }
 
-function Container12({ onClick }: { onClick?: () => void }) {
+function Container12({ onRoomConfigClick, onUploadFloorPlanClick }: { onRoomConfigClick?: () => void; onUploadFloorPlanClick?: () => void }) {
   return (
     <div className="absolute h-[200px] left-[348px] top-[350px]" data-name="Container">
       <div className="flex items-center justify-center gap-[16px]">
-        <Container13 onClick={onClick} />
-        <Container16 />
+        <Container13 onClick={onRoomConfigClick} />
+        <Container16 onClick={onUploadFloorPlanClick} />
       </div>
     </div>
   );
@@ -427,29 +459,29 @@ function Container12({ onClick }: { onClick?: () => void }) {
 function Paragraph9() {
   return (
     <div className="absolute h-[21px] left-[519.53px] opacity-70 top-[630px] w-[160.922px]" data-name="Paragraph">
-      <p className="-translate-x-1/2 absolute font-['Inter:Medium',sans-serif] font-medium leading-[21px] left-[80.5px] not-italic text-[#f4f0e6] text-[14px] text-center top-0 tracking-[2px]">www.tatvaops.com</p>
+      <p className="-translate-x-1/2 absolute font-['Inter:Medium',sans-serif] font-medium leading-[21px] left-[80.5px] not-italic text-[#f4f0e6] text-[14px] text-center top-0 tracking-[2px]"></p>
     </div>
   );
 }
 
-function Container5({ onClick }: { onClick?: () => void }) {
+function Container5({ onRoomConfigClick, onUploadFloorPlanClick }: { onRoomConfigClick?: () => void; onUploadFloorPlanClick?: () => void }) {
   return (
     <div className="absolute h-[651px] left-[120px] top-[59px] w-[1200px]" data-name="Container">
       <Paragraph />
       <Container6 />
       <Container8 />
-      <Container12 onClick={onClick} />
+      <Container12 onRoomConfigClick={onRoomConfigClick} onUploadFloorPlanClick={onUploadFloorPlanClick} />
       <Paragraph9 />
     </div>
   );
 }
 
-function Container2({ onClick }: { onClick?: () => void }) {
+function Container2({ onRoomConfigClick, onUploadFloorPlanClick }: { onRoomConfigClick?: () => void; onUploadFloorPlanClick?: () => void }) {
   return (
     <div className="h-[813px] relative shrink-0 w-full" data-name="Container">
       <Container3 />
       <Container4 />
-      <Container5 onClick={onClick} />
+      <Container5 onRoomConfigClick={onRoomConfigClick} onUploadFloorPlanClick={onUploadFloorPlanClick} />
     </div>
   );
 }
@@ -1096,58 +1128,6 @@ function Container38() {
   );
 }
 
-function ImageRobot() {
-  return (
-    <div className="relative shrink-0 size-[84px] chatbot-container" data-name="Image (Robot)">
-      <img 
-        alt="" 
-        className="absolute bg-clip-padding border-0 border-[transparent] border-solid inset-0 max-w-none object-contain pointer-events-none size-full mix-blend-screen chatbot-icon" 
-        src={imgImageRobot} 
-      />
-      <style>{`
-        @keyframes chatbotBreathe {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.02); }
-        }
-        
-        .chatbot-container {
-          cursor: pointer;
-          transition: all 0.18s ease-out;
-        }
-        
-        .chatbot-icon {
-          animation: chatbotBreathe 1800ms ease-in-out infinite;
-          transform-origin: center center;
-          transition: all 0.18s ease-out;
-          filter: drop-shadow(0 2px 14px rgba(0, 0, 0, 0.35));
-        }
-        
-        .chatbot-container:hover .chatbot-icon {
-          transform: scale(1.04);
-          filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.45));
-          animation: none;
-        }
-      `}</style>
-    </div>
-  );
-}
-
-function Button3() {
-  return (
-    <div className="absolute content-stretch flex items-center justify-center left-0 size-[84px] top-[70.95px]" data-name="Button">
-      <ImageRobot />
-    </div>
-  );
-}
-
-function Container57() {
-  return (
-    <div className="absolute h-[160px] left-[1317px] top-[579px] w-[84px]" data-name="Container">
-      <Button3 />
-    </div>
-  );
-}
-
 // ── Progress Stepper — horizontal circle + connector design ──────────────────
 function ProgressStepper() {
   const TOTAL    = 4; // kept for reference
@@ -1432,8 +1412,38 @@ function ProgressStepper() {
   );
 }
 
+type AppNavView =
+  | 'home'
+  | 'landing'
+  | 'imagineStart'
+  | 'login'
+  | 'verify'
+  | 'roomConfig'
+  | 'results'
+  | 'customisation'
+  | 'profile'
+  | 'createPost'
+  | 'followers'
+  | 'settings'
+  | 'gallery';
+
+function getInitialNavView(): AppNavView {
+  if (typeof window === 'undefined') return 'roomConfig';
+  const p = window.location.pathname.toLowerCase();
+  if (isSpaciaLoggedIn()) {
+    if (p.startsWith('/home')) return 'home';
+    // For "Imagine" start, always land on the studio first page.
+    return 'roomConfig';
+  }
+  if (p.startsWith('/home')) return 'home';
+  if (p.startsWith('/login')) return 'login';
+  if (p.startsWith('/verify')) return 'verify';
+  // For "Imagine" start, use the studio as the entry screen.
+  return 'roomConfig';
+}
+
 export default function UploadFloorPlan() {
-  const [currentView,    setCurrentView]    = useState<'home' | 'roomConfig' | 'results' | 'customisation'>('home');
+  const [currentView, setCurrentView] = useState<AppNavView>(() => getInitialNavView());
   const [hasActiveModal, setHasActiveModal] = useState(false);
   const [nextStepHandler, setNextStepHandler] = useState<(() => void) | null>(null);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
@@ -1456,13 +1466,80 @@ export default function UploadFloorPlan() {
   /** Arrangement + empty prefs: hide scan overlay on first wizard gen; show after Regenerate (apiGenerating). */
   const [wizardSuppressInitialScan, setWizardSuppressInitialScan] = useState(false);
   const [wizardApiError, setWizardApiError] = useState<string | null>(null);
+  const [isMobileHome, setIsMobileHome] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [homeHeroLoaded, setHomeHeroLoaded] = useState(false);
+  const [supportModalOpen, setSupportModalOpen] = useState(false);
+  const [supportDragY, setSupportDragY] = useState(0);
+  const supportTouchStartYRef = useRef<number | null>(null);
+  const [spaciaCountryCode] = useState('+91');
+  const [spaciaPhoneDigits, setSpaciaPhoneDigits] = useState('');
+  const [spaciaOtpDigits, setSpaciaOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const spaciaOtpRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const [spaciaTimer, setSpaciaTimer] = useState(30);
+  const [spaciaSendLoading, setSpaciaSendLoading] = useState(false);
+  const [spaciaVerifyLoading, setSpaciaVerifyLoading] = useState(false);
+  const [spaciaError, setSpaciaError] = useState<string | null>(null);
+  const createPostFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [createPostImages, setCreatePostImages] = useState<string[]>([]);
+  const [createPostActiveImageIdx, setCreatePostActiveImageIdx] = useState(0);
+  const [createPostCaption, setCreatePostCaption] = useState('');
+  const [profilePosts, setProfilePosts] = useState<Array<{ id: string; images: string[]; caption: string }>>([]);
+  const [socialTab, setSocialTab] = useState<'followers' | 'following'>('followers');
+  const [socialSearch, setSocialSearch] = useState('');
+  const [followingPeople, setFollowingPeople] = useState<string[]>(['Elena Vance', 'Sarah Jenkins']);
+  const [aiSuggestionsEnabled, setAiSuggestionsEnabled] = useState(true);
+  const [masterNotificationsEnabled, setMasterNotificationsEnabled] = useState(true);
+  const [likesCommentsEnabled, setLikesCommentsEnabled] = useState(true);
+  const [accountVisible, setAccountVisible] = useState(false);
+  const [darkModeEnabled, setDarkModeEnabled] = useState(true);
+  const [gallerySearch, setGallerySearch] = useState('');
+  const [galleryCategory, setGalleryCategory] = useState<'All' | 'Living Room' | 'Bedroom' | 'Kitchen' | 'Office' | 'AI Generated'>('All');
+  const [galleryTab, setGalleryTab] = useState<'Explore' | 'My Gallery' | 'Saved'>('Explore');
   /** Bumps when a new wizard completion starts generation; stale async completions must not apply. */
   const wizardGenTokenRef = useRef(0);
   /** When user finalizes into customisation before the first wizard generate returns, skip applying that full-room image (avoids overwriting a single-component edit). */
   const suppressWizardInitialGenResultRef = useRef(false);
 
+  // Full-house (floor plan) entry
+  const fullHouseInputRef = useRef<HTMLInputElement | null>(null);
+  const [fullHouseFloorPlanName, setFullHouseFloorPlanName] = useState<string | null>(null);
+  const [fullHouseFloorPlanUrl, setFullHouseFloorPlanUrl] = useState<string | null>(null);
+  const [fullHouseFloorPlanError, setFullHouseFloorPlanError] = useState<string | null>(null);
+
+  const logout = useCallback(() => {
+    clearSpaciaSession();
+    setIsMobileNavOpen(false);
+    setHasActiveModal(false);
+    setNextStepHandler(null);
+    setBackStepHandler(null);
+    setSelectedImageUrl(null);
+    setRoomSession(null);
+    setGeneratedImageUrl(null);
+    setGeneratedImageRawUrl(null);
+    setHistoryEntries([]);
+    setHistoryCursor(0);
+    setImageGenKey(0);
+    setCustomActiveTab(null);
+    setReturnToPreferences(false);
+    setWizardServerWarning(null);
+    setWizardApiPending(false);
+    setWizardSuppressInitialScan(false);
+    setWizardApiError(null);
+    suppressWizardInitialGenResultRef.current = false;
+    wizardGenTokenRef.current += 1;
+    // After logout, route to login.
+    setCurrentView('login');
+    try {
+      if (typeof window !== 'undefined') window.history.replaceState(null, '', '/login');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const resetToHome = useCallback(() => {
-    setCurrentView('home');
+    // "Restart" should return to the studio entry (upload + internal/external).
+    setCurrentView('roomConfig');
     setHasActiveModal(false);
     setNextStepHandler(null);
     setBackStepHandler(null);
@@ -1482,6 +1559,137 @@ export default function UploadFloorPlan() {
     suppressWizardInitialGenResultRef.current = false;
     wizardGenTokenRef.current += 1;
   }, []);
+
+  const closeSupportModal = useCallback(() => {
+    setSupportModalOpen(false);
+    setSupportDragY(0);
+    supportTouchStartYRef.current = null;
+  }, []);
+
+  const mobileDrawerItems = [
+    { label: 'Profile / Account', Icon: User, active: currentView === 'profile', onClick: () => setCurrentView('profile') },
+    { label: 'Settings', Icon: Settings, active: currentView === 'settings', onClick: () => setCurrentView('settings') },
+    { label: 'Pricing / Plans', Icon: Gem },
+    { label: 'Billing', Icon: CreditCard },
+    { label: 'Rewards', Icon: Gift },
+    { label: 'Support', Icon: CircleHelp, onClick: () => setSupportModalOpen(true) },
+  ] as const;
+
+  const handleSupportTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const t = e.touches[0];
+    if (!t) return;
+    supportTouchStartYRef.current = t.clientY;
+  }, []);
+
+  const handleSupportTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const startY = supportTouchStartYRef.current;
+    const t = e.touches[0];
+    if (startY == null || !t) return;
+    const delta = Math.max(0, t.clientY - startY);
+    setSupportDragY(Math.min(220, delta));
+  }, []);
+
+  const handleSupportTouchEnd = useCallback(() => {
+    if (supportDragY > 90) {
+      closeSupportModal();
+      return;
+    }
+    setSupportDragY(0);
+    supportTouchStartYRef.current = null;
+  }, [supportDragY, closeSupportModal]);
+
+  const handleCreatePostImagePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    void Promise.all(
+      files.map(
+        (file) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+            reader.onerror = () => reject(new Error('Failed to read image file.'));
+            reader.readAsDataURL(file);
+          })
+      )
+    ).then((urls) => {
+      const clean = urls.filter((u) => u.trim().length > 0);
+      if (!clean.length) return;
+      setCreatePostImages(clean);
+      setCreatePostActiveImageIdx(0);
+    }).catch(() => {
+      // keep the current compose state untouched if file parsing fails
+    });
+  }, []);
+
+  const handleCreatePostSubmit = useCallback(() => {
+    if (!createPostImages.length) return;
+    setProfilePosts((prev) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        images: createPostImages,
+        caption: createPostCaption.trim(),
+      },
+      ...prev,
+    ]);
+    setCreatePostCaption('');
+    setCreatePostImages([]);
+    setCreatePostActiveImageIdx(0);
+    if (createPostFileInputRef.current) createPostFileInputRef.current.value = '';
+    setCurrentView('profile');
+  }, [createPostCaption, createPostImages]);
+
+  const handleDeleteProfilePost = useCallback((postId: string) => {
+    setProfilePosts((prev) => prev.filter((p) => p.id !== postId));
+  }, []);
+
+  const socialPeople = useMemo(
+    () => ([
+      { name: 'Elena Vance', role: 'Product Designer', avatar: '👩‍💼' },
+      { name: 'Marcus Thorne', role: 'Creative Director', avatar: '👨‍💼' },
+      { name: 'Sarah Jenkins', role: 'Tech Lead', avatar: '👩‍💻' },
+      { name: 'David Chen', role: 'System Architect', avatar: '👨‍💻' },
+    ]),
+    []
+  );
+
+  const visibleSocialPeople = useMemo(() => {
+    const pool = socialTab === 'followers'
+      ? socialPeople
+      : socialPeople.filter((p) => followingPeople.includes(p.name));
+    const q = socialSearch.trim().toLowerCase();
+    if (!q) return pool;
+    return pool.filter((p) => p.name.toLowerCase().includes(q) || p.role.toLowerCase().includes(q));
+  }, [socialPeople, socialTab, followingPeople, socialSearch]);
+
+  const galleryCards = useMemo(
+    () => ([
+      { title: 'Modern Living Room', style: 'Modern', room: 'Living Room', likes: 231, ai: true, img: 'https://images.unsplash.com/photo-1616594039964-3f5e4b8c7d55?w=800&q=80&auto=format&fit=crop' },
+      { title: 'Luxury Bedroom', style: 'Luxury', room: 'Bedroom', likes: 189, ai: false, img: 'https://images.unsplash.com/photo-1616593969747-4797dc75033e?w=800&q=80&auto=format&fit=crop' },
+      { title: 'Minimal Kitchen', style: 'Minimal', room: 'Kitchen', likes: 156, ai: false, img: 'https://images.unsplash.com/photo-1556911220-e15b29be8c8f?w=800&q=80&auto=format&fit=crop' },
+      { title: 'Modern Office', style: 'Modern', room: 'Office', likes: 142, ai: true, img: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?w=800&q=80&auto=format&fit=crop' },
+      { title: 'Elegant Dining Room', style: 'Classic', room: 'Dining Room', likes: 98, ai: false, img: 'https://images.unsplash.com/photo-1617104551722-3b2d513664c6?w=800&q=80&auto=format&fit=crop' },
+      { title: 'Balcony Lounge', style: 'Modern', room: 'Outdoor', likes: 87, ai: true, img: 'https://images.unsplash.com/photo-1615874959474-d609969a20ed?w=800&q=80&auto=format&fit=crop' },
+    ]),
+    []
+  );
+
+  const visibleGalleryCards = useMemo(() => {
+    const q = gallerySearch.trim().toLowerCase();
+    return galleryCards.filter((c) => {
+      const matchCategory =
+        galleryCategory === 'All' ||
+        (galleryCategory === 'AI Generated' ? c.ai : c.room === galleryCategory);
+      const matchTab =
+        galleryTab === 'Explore' ||
+        (galleryTab === 'My Gallery' ? !c.ai : c.likes >= 140);
+      const matchSearch =
+        !q ||
+        c.title.toLowerCase().includes(q) ||
+        c.style.toLowerCase().includes(q) ||
+        c.room.toLowerCase().includes(q);
+      return matchCategory && matchTab && matchSearch;
+    });
+  }, [galleryCards, gallerySearch, galleryCategory, galleryTab]);
 
   const appendGenerationHistory = useCallback((watermarked: string, raw: string) => {
     const wm = watermarked.trim();
@@ -1531,21 +1739,344 @@ export default function UploadFloorPlan() {
     applyHistoryAt(historyCursor - 1);
   }, [canRedoGeneration, applyHistoryAt, historyCursor]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobileHome(window.innerWidth < 768);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // URL → view mapping (so /landing, /home, /login, /verify deep-links work in Vite)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const p = window.location.pathname.toLowerCase();
+    if (isSpaciaLoggedIn()) {
+      if (p.startsWith('/login') || p.startsWith('/verify')) {
+        setCurrentView('home');
+        try {
+          window.history.replaceState(null, '', '/home');
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      if (p.startsWith('/landing')) {
+        setCurrentView('roomConfig');
+        return;
+      }
+    }
+    if (p.startsWith('/landing')) setCurrentView('roomConfig');
+    else if (p.startsWith('/home')) setCurrentView('home');
+    else if (p.startsWith('/login')) setCurrentView('login');
+    else if (p.startsWith('/verify')) setCurrentView('verify');
+    // else: keep default
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep URL in sync with core views (non-destructive; does not trigger full reload)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const desired =
+      currentView === 'landing'
+        ? '/landing'
+        : currentView === 'home'
+          ? '/home'
+          : currentView === 'login'
+            ? '/login'
+            : currentView === 'verify'
+              ? '/verify'
+              : null;
+    if (!desired) return;
+    try {
+      if (window.location.pathname !== desired) {
+        window.history.replaceState(null, '', desired);
+      }
+    } catch {
+      // ignore history failures
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    if (currentView !== 'verify') return;
+    setSpaciaTimer(30);
+    const id = window.setInterval(() => {
+      setSpaciaTimer((t) => (t > 0 ? t - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [currentView]);
+
+  useEffect(() => {
+    if (!isMobileHome) {
+      setIsMobileNavOpen(false);
+      setHomeHeroLoaded(false);
+    }
+  }, [isMobileHome]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(PROFILE_POSTS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Array<{ id?: string; images?: string[]; caption?: string }>;
+      if (!Array.isArray(parsed)) return;
+      const normalized = parsed
+        .map((p) => ({
+          id: typeof p.id === 'string' ? p.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          images: Array.isArray(p.images) ? p.images.filter((u) => typeof u === 'string' && u.trim().length > 0) : [],
+          caption: typeof p.caption === 'string' ? p.caption : '',
+        }))
+        .filter((p) => p.images.length > 0);
+      setProfilePosts(normalized);
+    } catch {
+      // ignore malformed local storage
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(PROFILE_POSTS_STORAGE_KEY, JSON.stringify(profilePosts));
+    } catch {
+      // ignore storage quota/private mode failures
+    }
+  }, [profilePosts]);
+
   return (
-    <div className="relative size-full" data-name="upload floor plan">
+    <div className="relative w-full h-full min-h-screen md:min-h-0" data-name="upload floor plan">
       <AnimatePresence mode="wait">
 
-        {/* ── HOME VIEW ─────────────────────────────────────────────────────── */}
-        {currentView === 'home' && (
+        {/* ── IMAGINE ENTRY (same UI as Happy Space cards) ───────────────── */}
+        {currentView === 'imagineStart' && (
           <motion.div
-            key="home"
+            key="imagineStart"
+            initial={{ opacity: 1 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 1 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="absolute inset-0"
+          >
+            {isMobileHome ? (
+              <div className="relative w-full min-h-screen overflow-hidden">
+                {/* background */}
+                <img
+                  alt=""
+                  src={imgContainer}
+                  className="pointer-events-none absolute inset-0 size-full max-w-none object-cover object-center"
+                />
+                <div
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background:
+                      'linear-gradient(180deg, rgba(0,0,0,0.18) 0%, rgba(0,0,0,0.52) 55%, rgba(0,0,0,0.68) 100%)',
+                  }}
+                />
+
+                {/* content */}
+                <div className="relative z-[1] mx-auto w-full max-w-[420px] px-4 pt-[84px] pb-[120px]">
+                  <div className="text-center text-[12px] font-semibold tracking-[0.22em] text-white/60">
+                    {/* keep layout like reference; subtitle intentionally blank */}
+                  </div>
+                  <h1 className="mt-3 text-center text-[42px] leading-[1.05] font-extrabold tracking-[-0.04em] text-white drop-shadow-[0_12px_26px_rgba(0,0,0,0.55)]">
+                    What would you like
+                    <br />
+                    to imagine?
+                  </h1>
+
+                  <div className="mt-8 grid gap-5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFullHouseFloorPlanError(null);
+                        fullHouseInputRef.current?.click();
+                      }}
+                      className="w-full rounded-[18px] border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.06)] px-4 py-5 text-left text-white shadow-[0_18px_44px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[12px]"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="mt-1 flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.06)]">
+                          <LayoutDashboard size={18} className="text-white/80" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-[20px] font-semibold tracking-[-0.02em]">Imagine your full house</div>
+                          <div className="mt-1.5 text-[12px] leading-[1.55] text-white/60">
+                            Upload your floor plan (PDF or image). We won&apos;t go further from here yet.
+                          </div>
+                          <div className="mt-4 flex justify-center">
+                            <div className="inline-flex h-[44px] w-[170px] items-center justify-center rounded-[12px] border border-white/12 bg-[rgba(255,255,255,0.10)] text-[13px] font-semibold text-white/90">
+                              Get Started
+                            </div>
+                          </div>
+                          {fullHouseFloorPlanName && (
+                            <div className="mt-3 text-[12px] text-emerald-300/90">
+                              Selected: {fullHouseFloorPlanName}
+                            </div>
+                          )}
+                          {fullHouseFloorPlanError && (
+                            <div className="mt-3 text-[12px] text-red-400">{fullHouseFloorPlanError}</div>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('roomConfig')}
+                      className="w-full rounded-[18px] border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.06)] px-4 py-5 text-left text-white shadow-[0_18px_44px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[12px]"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="mt-1 flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-[rgba(255,255,255,0.06)]">
+                          <Home size={18} className="text-white/80" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-[20px] font-semibold tracking-[-0.02em]">Imagine your room</div>
+                          <div className="mt-1.5 text-[12px] leading-[1.55] text-white/60">
+                            Next choose Internal or External, then upload room photos.
+                          </div>
+                          <div className="mt-4 flex justify-center">
+                            <div className="inline-flex h-[44px] w-[170px] items-center justify-center rounded-[12px] border border-white/12 bg-[rgba(255,255,255,0.10)] text-[13px] font-semibold text-white/90">
+                              Get Started
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="absolute inset-0 z-[1]">
+                <Container2
+                  onRoomConfigClick={() => {
+                    // First card: full house => floor plan upload only
+                    setFullHouseFloorPlanError(null);
+                    fullHouseInputRef.current?.click();
+                  }}
+                  onUploadFloorPlanClick={() => {
+                    // Second card: room => internal/external -> upload photos
+                    setCurrentView('roomConfig');
+                  }}
+                />
+              </div>
+            )}
+
+            <input
+              ref={fullHouseInputRef}
+              type="file"
+              accept="application/pdf,image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (!f) return;
+                setFullHouseFloorPlanError(null);
+                const ok = f.type === 'application/pdf' || f.type.startsWith('image/');
+                if (!ok) {
+                  setFullHouseFloorPlanError('Please upload a PDF or image file.');
+                  return;
+                }
+                try {
+                  if (fullHouseFloorPlanUrl) URL.revokeObjectURL(fullHouseFloorPlanUrl);
+                } catch {
+                  // ignore
+                }
+                setFullHouseFloorPlanName(f.name);
+                setFullHouseFloorPlanUrl(URL.createObjectURL(f));
+              }}
+            />
+          </motion.div>
+        )}
+
+        {/* ── LANDING VIEW (was "home" cards) ─────────────────────────────── */}
+        {currentView === 'landing' && (
+          <motion.div
+            key="landing"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
             transition={{ duration: 0.3, ease: 'easeOut' }}
             className="absolute inset-0"
           >
-            <div className="relative w-full h-full overflow-hidden">
+            {isMobileHome ? (
+              <div className="relative w-full min-h-screen overflow-hidden bg-[#141313]">
+                <div className="absolute inset-0">
+                  <img
+                    alt=""
+                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuB0tdM-564nn0QpuYJ_LT_yv4l2ozkuU6n7ellKnp9KeEwT27fCkhpaHA5grS2ozdSO_vY6xSFP0H25RZoGkuomjDOwQbcvnUetdorL6zsSlNPGlDzYUNrleDFx5UeJSXNvvUdufWIdAJTLIchNX_v2zcZwxIpIVIUwHDt-yV9pYX_exXH39GYQNLo3BlBTzpvLBEmPkH7c74oNkVRFVcBLvaWXlmJ8mTbnhZMmZIebqkg0sGNFovFRoyUmXSy_QQ3Kabo3j0fclcuQ"
+                    className="absolute inset-0 h-full w-full object-cover object-center"
+                    loading="lazy"
+                  />
+                  <div className="absolute inset-0"
+                    style={{
+                      background:
+                        'linear-gradient(180deg, rgba(18,12,10,0.18) 0%, rgba(18,12,10,0.42) 45%, rgba(18,12,10,0.82) 100%)',
+                      mixBlendMode: 'multiply',
+                    }}
+                  />
+                  <div className="absolute inset-0 bg-[rgba(20,19,19,0.32)] backdrop-blur-[2px]" />
+                </div>
+
+                <div className="relative z-10 flex min-h-screen flex-col px-5 pt-[max(env(safe-area-inset-top),16px)] pb-[max(env(safe-area-inset-bottom),16px)]">
+                  <div className="flex items-center gap-3">
+                    <div className="text-[22px] font-bold tracking-[-0.2px] text-white/90">Vision</div>
+                  </div>
+
+                  <div className="mt-auto w-full max-w-[420px]">
+                    <div className="text-[12px] font-bold tracking-[0.22em] text-amber-400 uppercase">
+                      DESIGN YOUR WORLD
+                    </div>
+                    <div className="mt-3 text-[52px] leading-[1.04] tracking-[-0.02em] font-extrabold text-white drop-shadow-[0_10px_26px_rgba(0,0,0,0.45)]">
+                      Find Your
+                      <br />
+                      <span className="text-amber-400">Perfect</span> Space
+                    </div>
+                    <div className="mt-4 text-[18px] leading-[1.55] text-white/70 max-w-[30ch]">
+                      Join 2M+ homeowners discovering their dream spaces with elite architectural curation.
+                    </div>
+
+                    <div className="mt-5 flex items-center gap-3">
+                      <div className="flex -space-x-3">
+                        {[
+                          "https://lh3.googleusercontent.com/aida-public/AB6AXuCASiK4CkTTkabpRWb-dQKsKK7yLUJjDvsMVs6slv3UzjqL12rqwpUqghWDOiK_pfzi_3n_Xhc9MuHGYYjQ7298twnwixCP95RPb-_n6llF3SVtUsnJMOAg_zvjQO3DN8RmNySiCH6AIlFcoRY_xziof_AS-OI_6RnNzt2i8cI3_57eyAbYETPXV4lBdKBL2KnOFjVQl37wqaKhcPe2jMtXb9Kp7-8VKMEjA7GEqPqDHRQW_cCgn29nCdTpfnpMpEGuMg_qSG6dN5T1",
+                          "https://lh3.googleusercontent.com/aida-public/AB6AXuDler6BU1qtpvdyjxAihP26J8qzI9pXleIxggigH2z5qPmtjh-7tUodLkCGu2CSIGUT5N-VXFqQ2EzID8JaHHHt5p9lLfhLFBCH9eAJ8agNce8sh7P6iUlXmm_Jb85GqsNSFkILQltvyqkC0FVJBZQQyFHiONzJ08ArojwsLIsuLAy6wSx9IOV5B4yk3mxrwbVTHtXqmMF0uY-tNBOrOsmQORf4puaNq6pbpzzDWNgv_4E5XoSaYJEfsqTwmOrnOb_zCDXzGjb_XQNY",
+                          "https://lh3.googleusercontent.com/aida-public/AB6AXuDF0DykZ5uirvDJVe7K7XmHm9C7B379g4xGbBLoAuL2OPowb5Q11CmQ3MMK5blNs1bev0uFL7qr-hfIyWPG4oln_MMJYjdV7rMMS6eRtiblnvkxCyqCf_TRJQLYiYLZCD4mL2KXW9DRqSMr6iKp-gdQWABu2esn7UB7sUymjONuxmDGN_ASCjPDflNynUtiuYtXAuGBvpqxNsElMR_MNH2gcjRJeBtqjMD0H37q8J40EyYYgLB5Aquh8vAzNYqQ1PL3IWtKaNEHEY3A",
+                        ].map((src) => (
+                          <img key={src} alt="" src={src} className="w-9 h-9 rounded-full border-2 border-[#141313] object-cover shadow-[0_8px_18px_rgba(0,0,0,0.35)]" />
+                        ))}
+                      </div>
+                      <div className="text-[12px] font-bold tracking-[0.06em] text-white/80 px-3 py-2 rounded-full border border-white/10 bg-white/5 backdrop-blur-[16px]">
+                        +2M Users
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="fixed left-0 right-0 bottom-0 px-5 pb-[max(env(safe-area-inset-bottom),16px)] pt-4 bg-gradient-to-b from-transparent via-[#141313]/50 to-[#141313]/90 backdrop-blur-[10px]">
+                    <div className="max-w-[420px] mx-auto grid grid-cols-3 items-center">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentView('login')}
+                        className="justify-self-start text-[16px] font-semibold text-white/70 hover:text-white transition-colors"
+                      >
+                        Skip
+                      </button>
+                      <div className="justify-self-center flex items-center gap-2">
+                        <div className="w-7 h-1 rounded-full bg-amber-400" />
+                        <div className="w-2 h-1 rounded-full bg-white/20" />
+                        <div className="w-2 h-1 rounded-full bg-white/20" />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentView('login')}
+                        className="justify-self-end w-16 h-16 rounded-full bg-amber-400 text-black shadow-[0_0_26px_rgba(232,135,58,0.35)] hover:scale-105 active:scale-95 transition-transform flex items-center justify-center"
+                        aria-label="Continue"
+                      >
+                        <ArrowRight size={22} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="relative w-full h-full overflow-hidden">
               {/* Same interior hero as Figma / room-config studio (full-bleed + read legibility scrim) */}
               <img
                 alt=""
@@ -1566,10 +2097,1192 @@ export default function UploadFloorPlan() {
                   <Container19 />
                 </div>
               </div>
-              {/* Chatbot only — header & sidebar are provided by global shell */}
-              <div className="absolute inset-0 pointer-events-none z-[10]">
-                <div className="pointer-events-auto"><Container57 /></div>
+            </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* ── HOME VIEW (blank placeholder for now) ───────────────────────── */}
+        {currentView === 'home' && (
+          <motion.div
+            key="home-blank"
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            transition={{ duration: 0.3, ease: 'easeOut' }}
+            className="absolute inset-0 bg-[#1A1510] text-[#F5F0E8]"
+          >
+            <div className="relative min-h-screen">
+              {/* Top bar (match Imagine: logo + hamburger) */}
+              <div className="sticky top-0 z-50 px-4 pt-[max(env(safe-area-inset-top),12px)] pb-3 backdrop-blur-[12px] bg-[#1A1510]/90 border-b border-white/5">
+                <div className="flex items-center justify-between">
+                  <img alt="" src={imgImage} className="h-10 w-10 object-contain mix-blend-screen" loading="lazy" />
+                  <p className="text-[15px] font-semibold tracking-[0.2px] text-[#f4f0e6]">For You</p>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileNavOpen((v) => !v)}
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                    aria-label="Toggle menu"
+                  >
+                    {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+                  </button>
+                </div>
               </div>
+
+              {/* Mobile drawer overlay (same behavior as Imagine) */}
+              <AnimatePresence>
+                {isMobileNavOpen && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="absolute inset-0 z-[60]"
+                  >
+                    <button
+                      type="button"
+                      className="absolute inset-0 bg-[rgba(0,0,0,0.52)] backdrop-blur-[4px]"
+                      onClick={() => setIsMobileNavOpen(false)}
+                      aria-label="Close menu backdrop"
+                    />
+                    <motion.aside
+                      initial={{ x: '100%' }}
+                      animate={{ x: 0 }}
+                      exit={{ x: '100%' }}
+                      transition={{ duration: 0.26, ease: 'easeOut' }}
+                      className="absolute right-0 top-0 bottom-[calc(74px+env(safe-area-inset-bottom))] flex w-[82%] max-w-[350px] flex-col rounded-l-[20px] border-l border-[rgba(255,255,255,0.13)] bg-[rgba(12,12,12,0.92)] px-4 py-5 shadow-[0_0_50px_rgba(0,0,0,0.6)] backdrop-blur-[16px]"
+                    >
+                      <div className="mb-4 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-14 w-14 items-center justify-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[linear-gradient(145deg,#262626,#161616)] text-white/90">
+                            <User size={22} />
+                          </div>
+                          <div>
+                            <p className="text-[22px] leading-[1.05] font-semibold tracking-[-0.2px] text-white">Madhunala</p>
+                            <p className="text-[22px] leading-[1.05] font-semibold tracking-[-0.2px] text-white">Navya</p>
+                            <p className="mt-1 text-[10px] font-semibold tracking-[2.4px] text-white/55 uppercase">Premium Member</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsMobileNavOpen(false)}
+                          className="flex h-9 w-9 items-center justify-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.05)] text-white/80"
+                          aria-label="Close menu"
+                        >
+                          <X size={17} />
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMobileNavOpen(false);
+                          setCurrentView('profile');
+                        }}
+                        className="mb-4 inline-flex w-fit items-center gap-2 text-[16px] text-white/65 transition-colors duration-200 hover:text-white"
+                      >
+                        View Profile
+                        <ChevronRight size={15} />
+                      </button>
+
+                      <div className="mb-4 h-px bg-white/10" />
+
+                      <nav className="flex flex-1 flex-col gap-2 overflow-y-auto pb-2">
+                        {mobileDrawerItems.map(({ label, Icon, active, onClick }) => (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => {
+                              setIsMobileNavOpen(false);
+                              onClick?.();
+                            }}
+                            className={`flex h-[54px] w-full items-center gap-3 rounded-xl border px-4 text-left transition-all duration-200 ${
+                              active
+                                ? 'border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.14)] text-white'
+                                : 'border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.06)] text-white/55 hover:bg-[rgba(255,255,255,0.12)] hover:text-white'
+                            }`}
+                          >
+                            <Icon size={17} />
+                            <span className="text-[16px] font-medium">{label}</span>
+                          </button>
+                        ))}
+                      </nav>
+
+                      <div className="mt-3 mb-1 h-px bg-[rgba(255,255,255,0.08)]" />
+
+                      <div className="mt-auto rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.02)] p-2">
+                        <button
+                          type="button"
+                          onClick={logout}
+                          className="flex h-[54px] w-full items-center gap-3 rounded-xl border border-[rgba(239,68,68,0.36)] bg-[linear-gradient(90deg,rgba(127,29,29,0.42)_0%,rgba(127,29,29,0.28)_100%)] px-4 text-[16px] font-medium text-[#f87171]"
+                        >
+                          <LogOut size={17} />
+                          Logout
+                        </button>
+                      </div>
+                    </motion.aside>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <main className="px-4 pb-28 pt-4">
+                {/* Scrollable Tabs */}
+                <nav className="hide-scrollbar flex gap-3 overflow-x-auto pb-6">
+                  {[
+                    { label: 'For You', active: true },
+                    { label: 'Modernist', active: false },
+                    { label: 'Minimalist', active: false },
+                    { label: 'Japandi', active: false },
+                    { label: 'Industrial', active: false },
+                  ].map((t) => (
+                    <button
+                      key={t.label}
+                      type="button"
+                      className={
+                        t.active
+                          ? 'flex-shrink-0 rounded-full border border-[#E8873A]/20 bg-[#E8873A]/10 px-5 py-2 text-[12px] font-semibold tracking-[0.05em] text-[#E8873A]'
+                          : 'flex-shrink-0 rounded-full border border-white/5 px-5 py-2 text-[12px] font-semibold tracking-[0.05em] text-[#5A5248] transition-colors hover:text-[#E8873A]'
+                      }
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </nav>
+
+                {/* Masonry-like two-column grid */}
+                <div className="grid grid-cols-2 items-start gap-4">
+                  {/* Left Column */}
+                  <div className="flex flex-col gap-4">
+                    <div className="glass-card relative aspect-[3/5] overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <img
+                        alt=""
+                        className="h-full w-full object-cover"
+                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuCsrvdipvORdCJnUqBClI6sItrDAYQlPepHI4aUa5ttrNgtS8PTS2QkIrxe-JuO8XzPnDxpb40g7-EAfxponlV-27PNLnMwH39uEzbXQfwQFoefkbhGkYW5z3x70DiaHGoVt2tY_wT73PghZJVZGk2b_MkSJ-iR8u_Er3Dc8n2sQuO8dnfUZuGKbUWbsB-8ylmdAZBjUqqORzpNRFM_YmUYT5BqiQk4tV_oDhW6iNCzRlzrYRIHQfnw1CAO2CcdBf6Zr3e4FWfUFnnq"
+                      />
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1510]/90 to-transparent" />
+                    </div>
+
+                    <div className="glass-card overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <div className="relative h-48">
+                        <img
+                          alt=""
+                          className="h-full w-full object-cover"
+                          src="https://lh3.googleusercontent.com/aida-public/AB6AXuC887MVMO9v5h2WWZNFqUgRFmgCgXtMFuCwXHkiQlAW0JE3e1DZfcipzRgFl7NueRGqZuceRT0MKFVGmRG4MV9wT7kozukRyqHwsk859oddaJ0VaUGWoq4P5k7DCPzMCQcjXZkuQETRuwhejrUE6hjIWujajlfpx0TgUkTo2TMdVrxxajMNtlKKF1jTQeunRZQ84yxlAtG3tkiqSYdfF34w7HzpCooloJpwH5dmNedhzbEyMN0LWe73WxLvCeBZM5HruidFZH2PWShj"
+                        />
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1510]/90 to-transparent" />
+                      </div>
+                      <div className="p-4">
+                        <div className="text-[14px] font-semibold text-[#F1DFD6]">
+                          Warm Japandi Living...
+                        </div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#A38C7F]">
+                          Interior Design
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="glass-card overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <div className="relative aspect-square">
+                        <img
+                          alt=""
+                          className="h-full w-full object-cover"
+                          src="https://lh3.googleusercontent.com/aida-public/AB6AXuAoENoDSDGStCSPpcYVfiG23kEcMCSbK7Diz025_ypEVntZV6XA3IBhCLD8X0Gurax7rb7w4ondbGfEaEkb_O_9NuwWOc4Bxp03jC8EnvFf4umME7X-m2OaNQktAMYwISLlQL3i3LEs4klERicBzvkkRTBeHylIkdmWiAiIf7mFXHk-2JT5k-MFZkughKRMw3Duwh4V0ymlC8WngSyJebeedgjvrySmLmCqthr0X7xs8V7bu95KMFDDTll1hwTAsu3G8Mdty_M0Y1wM"
+                        />
+                        <div className="absolute left-3 top-3 inline-flex items-center gap-1 rounded bg-[#E8873A] px-2 py-1 text-[10px] font-bold text-black">
+                          <Sparkles size={12} />
+                          AI
+                        </div>
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1510]/90 to-transparent" />
+                      </div>
+                      <div className="p-4">
+                        <div className="text-[14px] font-semibold text-[#F1DFD6]">Boho Study Nook Idea</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column */}
+                  <div className="flex flex-col gap-4">
+                    <div className="glass-card relative -mt-8 h-36 overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <img
+                        alt=""
+                        className="h-full w-full object-cover"
+                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuARkFZsMo1c1xTw3KdmMdQyFfntkpjK3Na3WKiTAjwyCR3gYwDjBcmzfR2eIfOuBmmrmd4ofDLHJ3e0PaM6wvqKopfj_pWmOp3OpC6LKk9mkmI2qqjY_CklzJBcGr7iWngJPOJEzFNizMYwUjMmTmSkFDfV4aaHrRyN5Hx39ylCDwpZi_c5jo4NrQfS1bX5zu7J-GkH2fyMjVmzsXUk_lS1041Tts_gc2IzZyWWp1iF93tEQ_nvKyDeGH1UKf-JgVog0I_Eb0undpNB"
+                      />
+                      <div className="absolute right-3 top-10 rounded-full bg-[#E8873A] px-2 py-1 text-[10px] font-bold text-black">
+                        ₹3,200
+                      </div>
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1510]/90 to-transparent" />
+                    </div>
+
+                    <div className="glass-card overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <div className="relative aspect-[3/4]">
+                        <img
+                          alt=""
+                          className="h-full w-full object-cover"
+                          src="https://lh3.googleusercontent.com/aida-public/AB6AXuBAcZFuFc3VKh2wNCnhiBboNbRUHjhSVUGfuFHM57SR_Xd0spnSic-JtVTKSbJtSJxRY714VfzlV5_QMoAwUjbz1rr32edAItL_S-nrX4sc-_6yOnREro2javrSbydhuNg26Y3Pbh5ETHMqFh4KggXPRrfpVO318FDtercBlRUaYP-s2eaSnSx45saNhM18DjmQ4y6xvNXQO21fSxcfYYioDUoPTRK4E629ztgKxCw8lLhlQJB2EWZhJ2ksCCi9quRntkUiZeOwmWHF"
+                        />
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1510]/90 to-transparent" />
+                      </div>
+                      <div className="p-4">
+                        <div className="text-[14px] font-semibold text-[#F1DFD6]">Midnight Velvet Suite</div>
+                      </div>
+                    </div>
+
+                    <div className="glass-card relative aspect-[9/16] overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <img
+                        alt=""
+                        className="h-full w-full object-cover"
+                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuBgT3OX2HcUitQzAE0_j0AmVOy0ES3Aa1qCEgyvMUSyPqPth06mFhRbhbE3jJTr-gqbU_lTGePgd0lW3qL2dXETzOQlwwS4wBYX79Onq8fSW4EbN2cxWLAb1mRiJMj_Y4dajxeHiyTjIysB6iXXgLKuG0IffebkOkZJ5sykfKNP1xhbjPBewR596YYtUXIF_RC89bnZOLrGUfjdXj3aoekaJ17sH32Bwgw6XFSE7eBZrSyItKUUpO-merWvGkIhops8j6W1sWCi6Zta"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/30 bg-white/20 backdrop-blur-md">
+                          <div className="ml-0.5 h-0 w-0 border-y-[10px] border-y-transparent border-l-[16px] border-l-white/90" />
+                        </div>
+                      </div>
+                      <div className="absolute bottom-3 right-3 rounded bg-black/60 px-2 py-1 text-[10px] text-white backdrop-blur-md">
+                        1:12
+                      </div>
+                    </div>
+
+                    <div className="glass-card overflow-hidden rounded-[18px] border border-white/10 bg-[#252018]">
+                      <div className="relative h-40">
+                        <img
+                          alt=""
+                          className="h-full w-full object-cover"
+                          src="https://lh3.googleusercontent.com/aida-public/AB6AXuB7bZKkiDuspbwB0HiqLrZlsDYJlPFDD0tloGthVoArK_lLCWLf3DrABv19JYq0NDJVxcCZscyVkau7z3k9N9DK_e4ZQ2Dyagzq6wZMGBIAWhhOQCFeL7x7-VeEQujg_0X4X5tJ9dw9a7fS6f-Rq9zKOG0J-Kt8QQoc86q_T5D9_-cDfPTQyG62QbcgubYn6jT8k8LZ2upwGi1hw2Oke2ZGF4S0PpL_Ws_bCL7cmvus2rZnAywvufyv1DHYz_FUUi4hINd1coBoqDTh"
+                        />
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#1A1510]/90 to-transparent" />
+                      </div>
+                      <div className="p-4">
+                        <div className="text-[14px] font-semibold text-[#F1DFD6]">Geometric Trio Set</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </main>
+
+              <style>{`
+                .hide-scrollbar::-webkit-scrollbar { display: none; }
+                .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+              `}</style>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ── PROFILE VIEW (mobile) ─────────────────────────────────────────── */}
+        {currentView === 'profile' && (
+          <motion.div
+            key="profile"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 bg-[#141313]"
+          >
+            <div className="h-full w-full overflow-y-auto pb-28">
+              <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-[rgba(255,255,255,0.1)] bg-[rgba(10,10,10,0.9)] px-4 backdrop-blur-[10px]">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')}
+                    className="rounded-full p-1.5 text-white/90 transition-colors duration-200 hover:bg-white/10"
+                    aria-label="Back to home"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                  <h1 className="text-[22px] font-semibold tracking-[-0.2px] text-white">Profile</h1>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button type="button" className="rounded-full p-1.5 text-white/85 transition-colors duration-200 hover:bg-white/10" aria-label="Notifications">
+                    <Bell size={16} />
+                  </button>
+                  <button type="button" className="rounded-full p-1.5 text-white/85 transition-colors duration-200 hover:bg-white/10" aria-label="More">
+                    <MoreVertical size={16} />
+                  </button>
+                </div>
+              </header>
+
+              <main className="mx-auto w-full max-w-[430px] px-4 pt-6">
+                <section className="flex flex-col items-center text-center">
+                  <div className="mb-4 flex h-[92px] w-[92px] items-center justify-center rounded-full border-2 border-[rgba(255,255,255,0.2)] bg-[linear-gradient(145deg,#2f2f32,#1a1a1d)] shadow-[0_0_24px_rgba(255,255,255,0.14)]">
+                    <User size={38} className="text-white/85" />
+                  </div>
+                  <h2 className="text-[23px] leading-[1.1] font-semibold tracking-[-0.3px] text-white">Madhunala Navya</h2>
+                  <div className="mt-2 inline-flex items-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.08)] px-3 py-1">
+                    <span className="text-[9px] font-bold tracking-[1.6px] text-white/90 uppercase">Premium Member</span>
+                  </div>
+                  <p className="mt-3 text-[13px] text-white/80">Interior Designer | Modern Spaces</p>
+                  <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-white/62">
+                    <MapPin size={14} />
+                    Bangalore
+                  </p>
+                </section>
+
+                <section className="mt-7 flex justify-around border-y border-[rgba(255,255,255,0.08)] py-5">
+                  <button type="button" className="text-center">
+                    <div className="text-[17px] font-semibold text-white">{String(profilePosts.length)}</div>
+                    <div className="text-[11px] text-white/65">Posts</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSocialTab('followers');
+                      setCurrentView('followers');
+                    }}
+                    className="text-center"
+                  >
+                    <div className="text-[17px] font-semibold text-white">{String(socialPeople.length)}</div>
+                    <div className="text-[11px] text-white/65">Followers</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSocialTab('following');
+                      setCurrentView('followers');
+                    }}
+                    className="text-center"
+                  >
+                    <div className="text-[17px] font-semibold text-white">{String(followingPeople.length)}</div>
+                    <div className="text-[11px] text-white/65">Following</div>
+                  </button>
+                </section>
+
+                <section className="mt-6 space-y-3">
+                  <button type="button" className="h-[50px] w-full rounded-2xl bg-white text-[12px] font-semibold text-[#141313] transition-transform duration-150 active:scale-[0.98]">
+                    Edit Profile
+                  </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" className="flex h-[76px] flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] text-white transition-transform duration-150 active:scale-[0.98]">
+                      <Lightbulb size={18} />
+                      <span className="text-[11px]">Ideas & Likes</span>
+                    </button>
+                    <button type="button" className="flex h-[76px] flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] text-white transition-transform duration-150 active:scale-[0.98]">
+                      <Bookmark size={18} />
+                      <span className="text-[11px]">Saved Items</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="mt-8 pb-4">
+                  <div className="mb-6 flex items-end justify-between border-b border-[rgba(255,255,255,0.08)]">
+                    <button type="button" className="border-b-2 border-white px-6 py-3 text-[11px] font-medium text-white">
+                      Posts
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('createPost')}
+                      className="mb-2 inline-flex items-center gap-1 rounded-full border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.06)] px-3 py-1 text-[10px] font-semibold text-white/90"
+                    >
+                      <Plus size={12} />
+                      Create
+                    </button>
+                  </div>
+                  {profilePosts.length === 0 ? (
+                    <div className="rounded-[26px] border border-dashed border-[rgba(255,255,255,0.2)] bg-[rgba(255,255,255,0.04)] px-5 py-12 text-center">
+                      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[rgba(255,255,255,0.08)]">
+                        <Grid2x2 size={25} className="text-white/35" />
+                      </div>
+                      <h3 className="text-[16px] font-semibold text-white">No posts yet</h3>
+                      <p className="mt-1 text-[12px] text-white/62">Start sharing your designs and ideas</p>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentView('createPost')}
+                        className="mx-auto mt-6 flex h-12 items-center gap-2 rounded-full border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.09)] px-6 text-[12px] font-medium text-white transition-colors duration-200 hover:bg-[rgba(255,255,255,0.14)]"
+                      >
+                        <Plus size={18} />
+                        Create Post
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {profilePosts.map((post) => (
+                        <div key={post.id} className="relative overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.04)]">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteProfilePost(post.id)}
+                            aria-label="Delete post"
+                            className="absolute right-2 top-2 z-[2] flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(255,255,255,0.2)] bg-[rgba(0,0,0,0.55)] text-white/90"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                          <div className="aspect-[4/5] w-full bg-[rgba(255,255,255,0.03)]">
+                            <img src={post.images[0]} alt="Posted design" className="h-full w-full object-cover" />
+                            {post.images.length > 1 ? (
+                              <div className="absolute bottom-2 left-2 rounded-full border border-[rgba(255,255,255,0.2)] bg-[rgba(0,0,0,0.52)] px-2 py-1 text-[10px] font-semibold text-white">
+                                +{post.images.length - 1}
+                              </div>
+                            ) : null}
+                          </div>
+                          {post.caption ? (
+                            <p className="line-clamp-2 px-3 py-2 text-[11px] text-white/70">{post.caption}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </main>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ── CREATE POST VIEW (mobile) ─────────────────────────────────────── */}
+        {currentView === 'createPost' && (
+          <motion.div
+            key="createPost"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 bg-[#141313]"
+          >
+            <input
+              ref={createPostFileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handleCreatePostImagePick}
+            />
+            <div className="h-full w-full overflow-y-auto pb-28">
+              <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-[rgba(255,255,255,0.1)] bg-[rgba(10,10,10,0.9)] px-4 backdrop-blur-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('profile')}
+                  className="text-[12px] font-medium tracking-[0.12em] text-white/68 uppercase transition-colors duration-200 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <h1 className="text-[19px] font-semibold tracking-[-0.2px] text-white">New Post</h1>
+                <button
+                  type="button"
+                  disabled={!createPostImages.length}
+                  onClick={handleCreatePostSubmit}
+                  className={`text-[14px] font-semibold transition-colors duration-200 ${
+                    createPostImages.length ? 'text-white' : 'cursor-not-allowed text-white/35'
+                  }`}
+                >
+                  Post
+                </button>
+              </header>
+
+              <main className="mx-auto w-full max-w-[430px] space-y-4 px-4 pt-4">
+                <button
+                  type="button"
+                  onClick={() => createPostFileInputRef.current?.click()}
+                  className="group relative flex aspect-[4/5] w-full flex-col items-center justify-center overflow-hidden rounded-[20px] border-2 border-dashed border-[rgba(255,255,255,0.22)] bg-[rgba(255,255,255,0.05)]"
+                >
+                  {createPostImages.length ? (
+                    <img
+                      src={createPostImages[Math.max(0, Math.min(createPostActiveImageIdx, createPostImages.length - 1))]}
+                      alt="Selected post"
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  ) : null}
+                  <div
+                    className={`relative z-[1] flex flex-col items-center transition-opacity duration-200 ${
+                      createPostImages.length ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'
+                    }`}
+                  >
+                    <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.08)]">
+                      <Camera size={29} className="text-white" />
+                    </div>
+                    <p className="text-[18px] font-medium text-white">Tap to upload image</p>
+                    <p className="mt-1 text-[11px] text-white/65">High-quality 4:5 recommended</p>
+                  </div>
+                </button>
+                {createPostImages.length > 1 ? (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {createPostImages.map((img, idx) => (
+                      <button
+                        key={`${img}-${idx}`}
+                        type="button"
+                        onClick={() => setCreatePostActiveImageIdx(idx)}
+                        className={`h-14 w-14 flex-shrink-0 overflow-hidden rounded-xl border ${
+                          idx === createPostActiveImageIdx
+                            ? 'border-white/70'
+                            : 'border-[rgba(255,255,255,0.18)]'
+                        }`}
+                      >
+                        <img src={img} alt={`Selected ${idx + 1}`} className="h-full w-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                <section className="rounded-[20px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] p-4">
+                  <textarea
+                    value={createPostCaption}
+                    onChange={(e) => setCreatePostCaption(e.target.value)}
+                    placeholder="Write something about your design..."
+                    className="h-28 w-full resize-none bg-transparent text-[14px] text-white placeholder:text-white/30 focus:outline-none"
+                  />
+                </section>
+
+                <section className="space-y-4">
+                  <div className="rounded-[20px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] p-4">
+                    <div className="mb-4 flex items-center gap-2">
+                      <Tag size={16} className="text-white/65" />
+                      <span className="text-[11px] font-semibold tracking-[0.08em] text-white/65 uppercase">Trending Tags</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {['#Interior', '#Modern', '#Minimalism'].map((tag) => (
+                        <button key={tag} type="button" className="rounded-full border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.06)] px-3 py-2 text-[12px] text-white">
+                          {tag}
+                        </button>
+                      ))}
+                      <button type="button" className="flex h-9 w-9 items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.06)] text-white">
+                        <Plus size={16} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <button type="button" className="flex w-full items-center justify-between rounded-[20px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] p-4 text-left">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.06)]">
+                        <MapPin size={17} className="text-white" />
+                      </div>
+                      <div>
+                        <p className="text-[15px] font-semibold text-white">Add location</p>
+                        <p className="text-[11px] text-white/62">Help others find your inspiration</p>
+                      </div>
+                    </div>
+                    <ChevronRight size={16} className="text-white/45" />
+                  </button>
+
+                  <button type="button" className="flex w-full items-center justify-between rounded-[20px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] p-4 text-left">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.06)]">
+                        <SlidersHorizontal size={17} className="text-white" />
+                      </div>
+                      <p className="text-[15px] font-semibold text-white">Advanced Settings</p>
+                    </div>
+                    <ChevronRight size={16} className="text-white/45" />
+                  </button>
+                </section>
+              </main>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ── FOLLOWERS/FOLLOWING VIEW (mobile) ─────────────────────────────── */}
+        {currentView === 'followers' && (
+          <motion.div
+            key="followers"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 bg-[#141313]"
+          >
+            <div className="h-full w-full overflow-y-auto pb-28">
+              <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-[rgba(255,255,255,0.1)] bg-[rgba(10,10,10,0.9)] px-4 backdrop-blur-[10px]">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentView('profile')}
+                    className="rounded-full p-1.5 text-white/90 transition-colors duration-200 hover:bg-white/10"
+                    aria-label="Back to profile"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                  <h1 className="text-[22px] font-semibold tracking-[-0.2px] text-white">Followers</h1>
+                </div>
+                <button type="button" className="rounded-full p-1.5 text-white/85 transition-colors duration-200 hover:bg-white/10" aria-label="More">
+                  <MoreVertical size={16} />
+                </button>
+              </header>
+
+              <main className="mx-auto w-full max-w-[430px] px-4 pt-6">
+                <div className="mb-4 flex border-b border-[rgba(255,255,255,0.08)]">
+                  <button
+                    type="button"
+                    onClick={() => setSocialTab('followers')}
+                    className={`flex-1 border-b-2 py-3 text-[14px] font-medium ${
+                      socialTab === 'followers'
+                        ? 'border-white text-white'
+                        : 'border-transparent text-white/45'
+                    }`}
+                  >
+                    Followers
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSocialTab('following')}
+                    className={`flex-1 border-b-2 py-3 text-[14px] font-medium ${
+                      socialTab === 'following'
+                        ? 'border-white text-white'
+                        : 'border-transparent text-white/45'
+                    }`}
+                  >
+                    Following
+                  </button>
+                </div>
+
+                <div className="mb-6 flex items-center gap-3 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] px-4 py-3">
+                  <Search size={16} className="text-white/40" />
+                  <input
+                    value={socialSearch}
+                    onChange={(e) => setSocialSearch(e.target.value)}
+                    placeholder={socialTab === 'followers' ? 'Search followers' : 'Search following'}
+                    className="w-full bg-transparent text-[14px] text-white placeholder:text-white/25 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-4">
+                  {visibleSocialPeople.map((person) => {
+                    const isFollowing = followingPeople.includes(person.name);
+                    return (
+                      <div
+                        key={person.name}
+                        className="flex items-center justify-between rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] px-4 py-4"
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.08)] text-[24px]">
+                            {person.avatar}
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="truncate text-[14px] font-medium text-white">{person.name}</h3>
+                            <p className="truncate text-[10px] tracking-[0.08em] text-white/45 uppercase">{person.role}</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFollowingPeople((prev) =>
+                              prev.includes(person.name) ? prev.filter((n) => n !== person.name) : [...prev, person.name]
+                            );
+                          }}
+                          className={`ml-3 rounded-lg border px-5 py-2 text-[12px] font-medium ${
+                            isFollowing
+                              ? 'border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.1)] text-white'
+                              : 'border-[rgba(255,255,255,0.16)] bg-white text-[#1a1a1a]'
+                          }`}
+                        >
+                          {isFollowing ? 'Following' : 'Follow'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {visibleSocialPeople.length === 0 && (
+                    <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] px-5 py-10 text-center">
+                      <h3 className="text-[15px] font-semibold text-white">No {socialTab} found</h3>
+                      <p className="mt-1 text-[12px] text-white/55">Try searching with a different name.</p>
+                    </div>
+                  )}
+                </div>
+              </main>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ── SETTINGS VIEW (mobile) ────────────────────────────────────────── */}
+        {currentView === 'settings' && (
+          <motion.div
+            key="settings"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 bg-[#0e0e0e]"
+          >
+            <div className="h-full w-full overflow-y-auto pb-28">
+              <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-[rgba(255,255,255,0.1)] bg-[rgba(10,10,10,0.9)] px-4 backdrop-blur-[10px]">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')}
+                    className="rounded-full p-1.5 text-white/90 transition-colors duration-200 hover:bg-white/10"
+                    aria-label="Back to home"
+                  >
+                    <ArrowLeft size={18} />
+                  </button>
+                  <h1 className="text-[18px] font-semibold tracking-[-0.2px] text-white">Settings</h1>
+                </div>
+                <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.06)] text-white/90">
+                  <User size={15} />
+                </div>
+              </header>
+
+              <main className="mx-auto w-full max-w-[430px] space-y-4 px-4 py-4">
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">Account</h2>
+                  <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)]">
+                    <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><User size={16} className="text-white" /></div>
+                        <div>
+                          <p className="text-[14px] text-white">Edit Profile</p>
+                          <p className="text-[11px] text-white/45">Madhunala Navya</p>
+                        </div>
+                      </div>
+                      <ChevronRight size={15} className="text-white/35" />
+                    </button>
+                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><AtSign size={16} className="text-white" /></div>
+                        <div>
+                          <p className="text-[14px] text-white">Username</p>
+                          <p className="text-[11px] text-white/45">@madhunala_design</p>
+                        </div>
+                      </div>
+                      <span className="text-[12px] text-white/35">Edit</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">AI Preferences</h2>
+                  <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)] px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><Bot size={16} className="text-white" /></div>
+                        <div>
+                          <p className="text-[14px] text-white">AI Suggestions</p>
+                          <p className="text-[11px] text-white/45">Personalized smart prompts</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAiSuggestionsEnabled((v) => !v)}
+                        className={`inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border p-[2px] transition-colors ${aiSuggestionsEnabled ? 'border-emerald-300/40 bg-emerald-500/70' : 'border-[rgba(255,255,255,0.18)] bg-white/10'}`}
+                      >
+                        <span className={`h-5 w-5 rounded-full bg-white transition-transform ${aiSuggestionsEnabled ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">Notifications</h2>
+                  <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)]">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><BellRing size={16} className="text-white" /></div>
+                        <p className="text-[14px] text-white">Master Notifications</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMasterNotificationsEnabled((v) => !v)}
+                        className={`inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border p-[2px] transition-colors ${masterNotificationsEnabled ? 'border-emerald-300/40 bg-emerald-500/70' : 'border-[rgba(255,255,255,0.18)] bg-white/10'}`}
+                      >
+                        <span className={`h-5 w-5 rounded-full bg-white transition-transform ${masterNotificationsEnabled ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3">
+                      <p className="pl-12 text-[13px] text-white">Likes & Comments</p>
+                      <button
+                        type="button"
+                        onClick={() => setLikesCommentsEnabled((v) => !v)}
+                        className={`inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border p-[2px] transition-colors ${likesCommentsEnabled ? 'border-emerald-300/40 bg-emerald-500/70' : 'border-[rgba(255,255,255,0.18)] bg-white/10'}`}
+                      >
+                        <span className={`h-5 w-5 rounded-full bg-white transition-transform ${likesCommentsEnabled ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">Privacy</h2>
+                  <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)]">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><Eye size={16} className="text-white" /></div>
+                        <p className="text-[14px] text-white">Account Visibility</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAccountVisible((v) => !v)}
+                        className={`inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border p-[2px] transition-colors ${accountVisible ? 'border-emerald-300/40 bg-emerald-500/70' : 'border-[rgba(255,255,255,0.18)] bg-white/10'}`}
+                      >
+                        <span className={`h-5 w-5 rounded-full bg-white transition-transform ${accountVisible ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                    {['Who can see designs', 'Blocked Users', 'Data Permissions'].map((row) => (
+                      <button key={row} type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
+                        <p className="pl-12 text-[13px] text-white">{row}</p>
+                        <ChevronRight size={15} className="text-white/35" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">Account & Billing</h2>
+                  <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><Sparkles size={16} /></div>
+                        <div>
+                          <p className="text-[14px] text-white">Pro Plan</p>
+                          <p className="text-[11px] text-white/45">Renews Oct 24, 2024</p>
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-white/20 px-2 py-1 text-[9px] font-semibold tracking-[0.08em] text-white uppercase">Active</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" className="rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.1)] py-2 text-[10px] font-semibold text-white">Manage Subscription</button>
+                      <button type="button" className="rounded-xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.05)] py-2 text-[10px] font-semibold text-white/75">Cancel Subscription</button>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">App Preferences</h2>
+                  <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)]">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><Moon size={16} className="text-white" /></div>
+                        <p className="text-[14px] text-white">Dark Mode</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDarkModeEnabled((v) => !v)}
+                        className={`inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border p-[2px] transition-colors ${darkModeEnabled ? 'border-emerald-300/40 bg-emerald-500/70' : 'border-[rgba(255,255,255,0.18)] bg-white/10'}`}
+                      >
+                        <span className={`h-5 w-5 rounded-full bg-white transition-transform ${darkModeEnabled ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(255,255,255,0.1)]"><Languages size={16} className="text-white" /></div>
+                        <p className="text-[14px] text-white">Language</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-white/45">English (US)</span>
+                        <ChevronRight size={15} className="text-white/35" />
+                      </div>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">Support & Legal</h2>
+                  <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)]">
+                    <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3"><HelpCircle size={15} className="text-white/85" /><p className="text-[13px] text-white">Contact Support</p></div>
+                      <ExternalLink size={15} className="text-white/35" />
+                    </button>
+                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3"><FileText size={15} className="text-white/85" /><p className="text-[13px] text-white">FAQ</p></div>
+                      <ChevronRight size={15} className="text-white/35" />
+                    </button>
+                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3"><FileText size={15} className="text-white/85" /><p className="text-[13px] text-white">Terms of Service</p></div>
+                      <ChevronRight size={15} className="text-white/35" />
+                    </button>
+                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
+                      <div className="flex items-center gap-3"><Shield size={15} className="text-white/85" /><p className="text-[13px] text-white">Privacy Policy</p></div>
+                      <ChevronRight size={15} className="text-white/35" />
+                    </button>
+                  </div>
+                </section>
+
+                <section className="space-y-2 pt-2">
+                  <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-[#f87171] uppercase">Danger Zone</h2>
+                  <div className="overflow-hidden rounded-2xl border border-[rgba(248,113,113,0.25)] bg-[rgba(127,29,29,0.08)]">
+                    <button type="button" onClick={logout} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-[rgba(248,113,113,0.06)]">
+                      <div className="flex items-center gap-3"><LogOut size={15} className="text-[#f87171]" /><p className="text-[13px] text-[#f87171]">Logout</p></div>
+                      <ChevronRight size={15} className="text-[#f87171]/40" />
+                    </button>
+                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(248,113,113,0.18)] px-4 py-3 text-left hover:bg-[rgba(248,113,113,0.08)]">
+                      <div className="flex items-center gap-3"><Trash2 size={15} className="text-[#f87171]" /><p className="text-[13px] text-[#f87171]">Delete Account</p></div>
+                      <ChevronRight size={15} className="text-[#f87171]/40" />
+                    </button>
+                  </div>
+                </section>
+
+                <p className="py-6 text-center text-[10px] text-white/35">Version 4.2.1-stable • Build 892</p>
+              </main>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ── GALLERY VIEW (mobile) ─────────────────────────────────────────── */}
+        {currentView === 'gallery' && (
+          <motion.div
+            key="gallery"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 bg-[#070a0f]"
+          >
+            <div className="pointer-events-none absolute inset-0">
+              <div className="absolute -top-20 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-[rgba(35,22,10,0.5)] blur-[90px]" />
+              <div className="absolute top-1/3 -left-16 h-64 w-64 rounded-full bg-[rgba(12,26,44,0.42)] blur-[110px]" />
+              <div className="absolute bottom-24 right-[-80px] h-64 w-64 rounded-full bg-[rgba(45,27,12,0.35)] blur-[120px]" />
+            </div>
+            <div className="relative h-full w-full overflow-y-auto pb-28">
+              <main className="mx-auto w-full max-w-[430px] px-4 py-4">
+                <header className="mb-3 flex items-center justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#f0b35f]/40 bg-[linear-gradient(135deg,#2f1a0a,#11141a)] text-[#f2ba68] shadow-[0_0_0_1px_rgba(242,186,104,0.08)]">
+                    ✦
+                  </div>
+                  <div className="text-center">
+                    <h1 className="text-[30px] leading-none font-semibold text-[#f5f7fb]">Gallery</h1>
+                    <p className="mt-1 text-[12px] text-[#b8c0cc]">Explore beautiful spaces for inspiration</p>
+                  </div>
+                  <button type="button" className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-[rgba(255,255,255,0.05)] text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                    <Menu size={18} />
+                  </button>
+                </header>
+
+                <div className="mb-3 flex gap-2">
+                  <div className="flex flex-1 items-center gap-2 rounded-xl border border-white/12 bg-[rgba(255,255,255,0.05)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                    <Search size={16} className="text-[#a8b0bc]" />
+                    <input
+                      value={gallerySearch}
+                      onChange={(e) => setGallerySearch(e.target.value)}
+                      placeholder="Search designs, styles, rooms..."
+                      className="w-full bg-transparent text-[13px] text-[#e8ecf2] placeholder:text-[#9aa3af] focus:outline-none"
+                    />
+                  </div>
+                  <button type="button" className="inline-flex items-center gap-1 rounded-xl border border-white/12 bg-[rgba(255,255,255,0.06)] px-3 text-[13px] text-[#d8deea] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                    <Funnel size={14} />
+                    Filter
+                  </button>
+                </div>
+
+                <div className="mb-3 rounded-xl border border-white/12 bg-[rgba(255,255,255,0.04)] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="grid grid-cols-3 gap-1">
+                    {(['Explore', 'My Gallery', 'Saved'] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setGalleryTab(tab)}
+                        className={`rounded-lg px-2 py-2 text-[12px] ${
+                          galleryTab === tab
+                            ? 'bg-[linear-gradient(135deg,rgba(232,172,91,0.22),rgba(232,172,91,0.1))] text-[#f4c785]'
+                            : 'text-[#bcc5d1]'
+                        }`}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {galleryTab === 'Explore' ? (
+                  <section aria-label="Home feed" className="pt-2">
+                    <nav className="hide-scrollbar flex gap-3 overflow-x-auto pb-5">
+                      {[
+                        { label: 'For You', active: true },
+                        { label: 'Modernist', active: false },
+                        { label: 'Minimalist', active: false },
+                        { label: 'Japandi', active: false },
+                        { label: 'Industrial', active: false },
+                      ].map((t) => (
+                        <button
+                          key={t.label}
+                          type="button"
+                          className={
+                            t.active
+                              ? 'flex-shrink-0 rounded-full border border-[#E8873A]/20 bg-[#E8873A]/10 px-5 py-2 text-[12px] font-semibold tracking-[0.05em] text-[#E8873A]'
+                              : 'flex-shrink-0 rounded-full border border-white/12 bg-[rgba(255,255,255,0.03)] px-5 py-2 text-[12px] font-semibold tracking-[0.05em] text-[#bcc5d1] transition-colors hover:text-[#E8873A]'
+                          }
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </nav>
+
+                    <div className="grid grid-cols-2 items-start gap-4">
+                      <div className="flex flex-col gap-4">
+                        <article className="relative aspect-[3/5] overflow-hidden rounded-[18px] border border-white/12 bg-[rgba(255,255,255,0.04)] shadow-[0_12px_34px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                          <img
+                            alt=""
+                            className="h-full w-full object-cover"
+                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuCsrvdipvORdCJnUqBClI6sItrDAYQlPepHI4aUa5ttrNgtS8PTS2QkIrxe-JuO8XzPnDxpb40g7-EAfxponlV-27PNLnMwH39uEzbXQfwQFoefkbhGkYW5z3x70DiaHGoVt2tY_wT73PghZJVZGk2b_MkSJ-iR8u_Er3Dc8n2sQuO8dnfUZuGKbUWbsB-8ylmdAZBjUqqORzpNRFM_YmUYT5BqiQk4tV_oDhW6iNCzRlzrYRIHQfnw1CAO2CcdBf6Zr3e4FWfUFnnq"
+                          />
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0f]/85 to-transparent" />
+                          <button
+                            type="button"
+                            className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white/90"
+                            aria-label="Save"
+                          >
+                            <Bookmark size={16} />
+                          </button>
+                          <div className="absolute left-3 bottom-3 inline-flex items-center gap-2 rounded-full border border-white/14 bg-[rgba(8,10,14,0.55)] px-3 py-1 text-[12px] text-white/90">
+                            <span className="text-white/80">♡</span>
+                            <span className="font-medium">231</span>
+                          </div>
+                        </article>
+
+                        <article className="overflow-hidden rounded-[18px] border border-white/12 bg-[rgba(255,255,255,0.04)] shadow-[0_12px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                          <div className="relative h-48">
+                            <img
+                              alt=""
+                              className="h-full w-full object-cover"
+                              src="https://lh3.googleusercontent.com/aida-public/AB6AXuC887MVMO9v5h2WWZNFqUgRFmgCgXtMFuCwXHkiQlAW0JE3e1DZfcipzRgFl7NueRGqZuceRT0MKFVGmRG4MV9wT7kozukRyqHwsk859oddaJ0VaUGWoq4P5k7DCPzMCQcjXZkuQETRuwhejrUE6hjIWujajlfpx0TgUkTo2TMdVrxxajMNtlKKF1jTQeunRZQ84yxlAtG3tkiqSYdfF34w7HzpCooloJpwH5dmNedhzbEyMN0LWe73WxLvCeBZM5HruidFZH2PWShj"
+                            />
+                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0f]/88 to-transparent" />
+                            <button
+                              type="button"
+                              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white/90"
+                              aria-label="Save"
+                            >
+                              <Bookmark size={16} />
+                            </button>
+                            <div className="absolute left-3 bottom-3 inline-flex items-center gap-2 rounded-full border border-white/14 bg-[rgba(8,10,14,0.55)] px-3 py-1 text-[12px] text-white/90">
+                              <span className="text-white/80">♡</span>
+                              <span className="font-medium">189</span>
+                            </div>
+                          </div>
+                          <div className="p-4">
+                            <div className="text-[14px] font-semibold text-[#edf1f7]">Warm Japandi Living...</div>
+                            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#a8b0bc]">
+                              Interior Design
+                            </div>
+                          </div>
+                        </article>
+
+                        <article className="overflow-hidden rounded-[18px] border border-white/12 bg-[rgba(255,255,255,0.04)] shadow-[0_12px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                          <div className="relative aspect-square">
+                            <img
+                              alt=""
+                              className="h-full w-full object-cover"
+                              src="https://lh3.googleusercontent.com/aida-public/AB6AXuAoENoDSDGStCSPpcYVfiG23kEcMCSbK7Diz025_ypEVntZV6XA3IBhCLD8X0Gurax7rb7w4ondbGfEaEkb_O_9NuwWOc4Bxp03jC8EnvFf4umME7X-m2OaNQktAMYwISLlQL3i3LEs4klERicBzvkkRTBeHylIkdmWiAiIf7mFXHk-2JT5k-MFZkughKRMw3Duwh4V0ymlC8WngSyJebeedgjvrySmLmCqthr0X7xs8V7bu95KMFDDTll1hwTAsu3G8Mdty_M0Y1wM"
+                            />
+                            <div className="absolute left-3 top-3 inline-flex items-center gap-1 rounded bg-[#E8873A] px-2 py-1 text-[10px] font-bold text-black">
+                              <Sparkles size={12} />
+                              AI
+                            </div>
+                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0f]/86 to-transparent" />
+                            <button
+                              type="button"
+                              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white/90"
+                              aria-label="Save"
+                            >
+                              <Bookmark size={16} />
+                            </button>
+                            <div className="absolute left-3 bottom-3 inline-flex items-center gap-2 rounded-full border border-white/14 bg-[rgba(8,10,14,0.55)] px-3 py-1 text-[12px] text-white/90">
+                              <span className="text-white/80">♡</span>
+                              <span className="font-medium">156</span>
+                            </div>
+                          </div>
+                          <div className="p-4">
+                            <div className="text-[14px] font-semibold text-[#edf1f7]">Boho Study Nook Idea</div>
+                          </div>
+                        </article>
+                      </div>
+
+                      <div className="flex flex-col gap-4">
+                        <article className="relative -mt-8 h-36 overflow-hidden rounded-[18px] border border-white/12 bg-[rgba(255,255,255,0.04)] shadow-[0_12px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                          <img
+                            alt=""
+                            className="h-full w-full object-cover"
+                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuARkFZsMo1c1xTw3KdmMdQyFfntkpjK3Na3WKiTAjwyCR3gYwDjBcmzfR2eIfOuBmmrmd4ofDLHJ3e0PaM6wvqKopfj_pWmOp3OpC6LKk9mkmI2qqjY_CklzJBcGr7iWngJPOJEzFNizMYwUjMmTmSkFDfV4aaHrRyN5Hx39ylCDwpZi_c5jo4NrQfS1bX5zu7J-GkH2fyMjVmzsXUk_lS1041Tts_gc2IzZyWWp1iF93tEQ_nvKyDeGH1UKf-JgVog0I_Eb0undpNB"
+                          />
+                          <div className="absolute right-3 top-10 rounded-full bg-[#E8873A] px-2 py-1 text-[10px] font-bold text-black">
+                            ₹3,200
+                          </div>
+                          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0f]/86 to-transparent" />
+                          <button
+                            type="button"
+                            className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white/90"
+                            aria-label="Save"
+                          >
+                            <Bookmark size={16} />
+                          </button>
+                          <div className="absolute left-3 bottom-3 inline-flex items-center gap-2 rounded-full border border-white/14 bg-[rgba(8,10,14,0.55)] px-3 py-1 text-[12px] text-white/90">
+                            <span className="text-white/80">♡</span>
+                            <span className="font-medium">142</span>
+                          </div>
+                        </article>
+
+                        <article className="overflow-hidden rounded-[18px] border border-white/12 bg-[rgba(255,255,255,0.04)] shadow-[0_12px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                          <div className="relative aspect-[3/4]">
+                            <img
+                              alt=""
+                              className="h-full w-full object-cover"
+                              src="https://lh3.googleusercontent.com/aida-public/AB6AXuCng3hG4YjFJkZ3G2fKpIu7CwYlr3bvr7fX0s6UuTYLQvP3a4sH0c3ZcVG35g5h7uH3uYfK3B1YpXlQ2d8tYj1I9B2kYqQ2mQqv7e8q3nMmtbKcS3b0F9mGQ3zD6Zr_0b9rQe7Jg0xQ9oYq6Qh7l9n0kJm2D9e5g"
+                            />
+                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0f]/88 to-transparent" />
+                            <button
+                              type="button"
+                              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white/90"
+                              aria-label="Save"
+                            >
+                              <Bookmark size={16} />
+                            </button>
+                            <div className="absolute left-3 bottom-3 inline-flex items-center gap-2 rounded-full border border-white/14 bg-[rgba(8,10,14,0.55)] px-3 py-1 text-[12px] text-white/90">
+                              <span className="text-white/80">♡</span>
+                              <span className="font-medium">189</span>
+                            </div>
+                          </div>
+                          <div className="p-4">
+                            <div className="text-[14px] font-semibold text-[#edf1f7]">Midnight Velvet Suite</div>
+                          </div>
+                        </article>
+
+                        <article className="overflow-hidden rounded-[18px] border border-white/12 bg-[rgba(255,255,255,0.04)] shadow-[0_12px_34px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                          <div className="relative aspect-[4/5]">
+                            <img
+                              alt=""
+                              className="h-full w-full object-cover"
+                              src="https://lh3.googleusercontent.com/aida-public/AB6AXuA8wT7k8xQeWz3n3p9H2m4LwqYg0l2lqV3b9tQw0sF4r8mJ2n2kK7xTQw8R4c9K0xv3o2t7Qw9t7N2b0"
+                            />
+                            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#070a0f]/86 to-transparent" />
+                            <button
+                              type="button"
+                              className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white/90"
+                              aria-label="Save"
+                            >
+                              <Bookmark size={16} />
+                            </button>
+                            <div className="absolute left-3 bottom-3 inline-flex items-center gap-2 rounded-full border border-white/14 bg-[rgba(8,10,14,0.55)] px-3 py-1 text-[12px] text-white/90">
+                              <span className="text-white/80">♡</span>
+                              <span className="font-medium">98</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="absolute inset-0 flex items-center justify-center"
+                              aria-label="Play"
+                            >
+                              <span className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/18 bg-[rgba(8,10,14,0.55)] text-white">
+                                <span className="ml-1 block h-0 w-0 border-y-[7px] border-y-transparent border-l-[11px] border-l-white/85" />
+                              </span>
+                            </button>
+                          </div>
+                        </article>
+                      </div>
+                    </div>
+                  </section>
+                ) : (
+                  <section className="grid grid-cols-2 gap-3">
+                    {visibleGalleryCards.map((card) => (
+                      <article key={card.title} className="overflow-hidden rounded-xl border border-white/12 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] shadow-[0_12px_32px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.05)]">
+                        <div className="relative aspect-[1.08] w-full overflow-hidden">
+                          <img src={card.img} alt={card.title} className="h-full w-full object-cover" />
+                          <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-[#08090d]/80 to-transparent" />
+                          {card.ai && (
+                            <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border border-white/16 bg-[rgba(8,10,14,0.7)] px-2 py-1 text-[10px] text-white">
+                              <Sparkles size={10} />
+                              AI Generated
+                            </span>
+                          )}
+                          <button className="absolute right-2 top-2 rounded-full border border-white/20 bg-[rgba(8,10,14,0.68)] p-1.5 text-white/90">
+                            <Bookmark size={12} />
+                          </button>
+                        </div>
+                        <div className="px-2.5 py-2.5">
+                          <h3 className="truncate text-[14px] font-medium text-[#edf1f7]">{card.title}</h3>
+                          <p className="mt-0.5 text-[11px] text-[#a8b0bc]">{card.style} · {card.room}</p>
+                          <div className="mt-2 flex items-center justify-between text-[12px] text-[#d8deea]">
+                            <span>♡ {card.likes}</span>
+                            <Bookmark size={12} className="text-[#e8ac5b]" />
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </section>
+                )}
+
+                <button className="fixed bottom-24 right-6 z-[65] flex h-14 w-14 items-center justify-center rounded-full border border-[#f4c37f]/40 bg-[linear-gradient(135deg,#f0bf71,#de9834)] text-white shadow-[0_14px_28px_rgba(232,172,91,0.38)]">
+                  <Plus size={25} />
+                </button>
+              </main>
             </div>
           </motion.div>
         )}
@@ -1688,7 +3401,14 @@ export default function UploadFloorPlan() {
           >
             <Container3Blurred />
             <Container4 />
-            <div className="absolute left-[127px] top-[78px] w-[1289px] h-[657px] z-[1]">
+            <div
+              className={
+                isMobileHome
+                  ? 'absolute left-0 right-0 top-[48px] bottom-0 z-[1]'
+                  : 'absolute left-[127px] top-[78px] w-[1289px] h-[657px] z-[1]'
+              }
+              style={isMobileHome ? { padding: '8px 8px 10px' } : undefined}
+            >
               <GenerationResults
                 selectedImageUrl={selectedImageUrl}
                 roomSession={roomSession}
@@ -1730,7 +3450,14 @@ export default function UploadFloorPlan() {
           >
             <Container3Blurred />
             <Container4 />
-            <div className="absolute left-[127px] top-[78px] w-[1289px] h-[657px] z-[1]" style={{ overflow: 'visible' }}>
+            <div
+              className={
+                isMobileHome
+                  ? 'absolute left-0 right-0 top-[48px] bottom-0 z-[1]'
+                  : 'absolute left-[127px] top-[78px] w-[1289px] h-[657px] z-[1]'
+              }
+              style={isMobileHome ? { padding: '8px 8px 10px', overflow: 'hidden' } : { overflow: 'visible' }}
+            >
               <GenerationResults
                 selectedImageUrl={selectedImageUrl}
                 roomSession={roomSession}
@@ -1781,24 +3508,583 @@ export default function UploadFloorPlan() {
       )}
 
       {/* ── GLOBAL SHELL — header + sidebar, always on top, never animated ── */}
-      <AppHeader
-        onBack={
-          currentView === 'roomConfig' && backStepHandler
-            ? backStepHandler
-            : currentView === 'roomConfig'
-            ? () => setCurrentView('home')
-            : currentView === 'results'
-            ? () => {
-                setReturnToPreferences(true);
-                setCurrentView('roomConfig');
-              }
-            : currentView === 'customisation'
-            ? () => setCurrentView('results')
-            : undefined
-        }
-        onNext={nextStepHandler || undefined}
-      />
-      <AppSidebar />
+      {!(isMobileHome && (currentView === 'landing' || currentView === 'home' || currentView === 'login' || currentView === 'verify' || currentView === 'profile' || currentView === 'createPost' || currentView === 'followers' || currentView === 'settings' || currentView === 'gallery')) && (
+        <AppHeader
+          onBack={
+            currentView === 'roomConfig' && backStepHandler
+              ? backStepHandler
+              : currentView === 'roomConfig'
+              ? () => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')
+              : currentView === 'profile'
+              ? () => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')
+              : currentView === 'results'
+              ? () => {
+                  setReturnToPreferences(true);
+                  setCurrentView('roomConfig');
+                }
+              : currentView === 'customisation'
+              ? () => setCurrentView('results')
+              : undefined
+          }
+          onNext={nextStepHandler || undefined}
+        />
+      )}
+      {!isMobileHome && <AppSidebar />}
+
+      {isMobileHome && !(['landing','login','verify'].includes(currentView)) && (
+        <div className="fixed bottom-0 left-0 right-0 z-[60] border-t border-[rgba(255,255,255,0.12)] bg-[rgba(12,12,12,0.9)] px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 backdrop-blur-[14px]">
+          <div className="grid grid-cols-5 gap-1">
+            {[
+              { label: 'Home', Icon: Home, active: currentView === 'home', onClick: () => setCurrentView('home') },
+              { label: 'Projects', Icon: FolderKanban, active: false, onClick: () => {} },
+              {
+                label: 'Imagine',
+                Icon: Sparkles,
+                active: currentView === 'landing' || ['roomConfig', 'results', 'customisation'].includes(currentView),
+                onClick: () => setCurrentView('imagineStart'),
+              },
+              { label: 'Gallery', Icon: Images, active: currentView === 'gallery', onClick: () => setCurrentView('gallery') },
+              { label: 'Contest', Icon: Trophy, active: false, onClick: () => {} },
+            ].map(({ label, Icon, active, onClick }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={onClick}
+                className={`flex min-h-[52px] flex-col items-center justify-center rounded-lg ${
+                  active
+                    ? label === 'Gallery'
+                      ? 'bg-[rgba(232,172,91,0.16)] text-[#f2c27d] border border-[rgba(232,172,91,0.45)]'
+                      : 'bg-[rgba(255,255,255,0.14)] text-white'
+                    : 'text-white/75'
+                }`}
+              >
+                <Icon size={18} />
+                <span className="mt-1 text-[11px]">{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── SPACIA LOGIN VIEW (Vite UI) ───────────────────────────────────── */}
+      {currentView === 'login' && (
+        <motion.div
+          key="spacia-login"
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3, ease: 'easeOut' }}
+          className="absolute inset-0 bg-[#1A1510] text-[#F5F0E8]"
+        >
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute top-0 left-0 w-full h-[45%] overflow-hidden">
+              <img
+                alt=""
+                className="w-full h-full object-cover opacity-60 scale-110 blur-xl mix-blend-luminosity"
+                src="https://lh3.googleusercontent.com/aida-public/AB6AXuA1UU98rYsK8SyyDDfJg5bGJSm__C4a8UjHygOr3lkn8Lc2vL2j0K0Op3cUyuiEZv7i2XJGpBLpKAGTsfLZYbm8lDsZCg9KDBQEFxWbEPH2bta1el6BlsSP70JzjKJvQszHRPtdGIOJyK78DuRZI4_kdEc1TdH12YWQhXlbkpn5ilHBkzyPEuxjLwNS5PVhP0MSwgfIpYV-QFr-UQKs_mmkx5ZOidkW4N-FpnQy1r2nsKnZ7Y-AbhSZ4bFA_lI7Cqtb2D6stNUsm_kE"
+              />
+            </div>
+            <div className="absolute top-[-10%] left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-amber-500/20 rounded-full blur-[80px] mix-blend-screen" />
+            <div className="absolute inset-0 bg-gradient-to-b from-[#1A1510]/55 via-[#1A1510]/95 to-[#1A1510]" />
+          </div>
+
+          <div className="relative z-10 flex flex-col min-h-screen px-5 pt-[max(env(safe-area-inset-top),16px)] pb-[max(env(safe-area-inset-bottom),16px)] max-w-[460px] mx-auto">
+            <header className="flex w-full items-center justify-start mb-10">
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')}
+                className="w-[42px] h-[42px] rounded-full bg-white/[0.07] border border-white/[0.10] flex items-center justify-center hover:bg-white/[0.12] transition-colors backdrop-blur-[16px]"
+              >
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="flex flex-col items-center justify-center mb-8">
+              <div className="w-[50px] h-[50px] rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-4 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+                {/* brand mark removed */}
+              </div>
+              <div className="flex flex-col items-center">
+                <div className="text-[22px] font-semibold tracking-tight text-[#F5F0E8]">Vision</div>
+                <div className="w-[28px] h-[2px] bg-amber-500 mt-2 rounded-full shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
+              </div>
+            </div>
+
+            <div className="text-center mb-8">
+              <div className="text-[32px] font-bold text-[#F5F0E8]">Welcome Back</div>
+              <div className="mt-2 text-[16px] text-white/60">Your space awaits.</div>
+            </div>
+
+            <div className="bg-[#252018]/80 backdrop-blur-[16px] rounded-[20px] p-5 border border-white/[0.06] shadow-2xl">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <div className="text-[12px] font-semibold uppercase tracking-wider text-white/55">Region</div>
+                  <button
+                    type="button"
+                    onClick={() => alert('Country selector coming soon.')}
+                    className="w-full bg-[#1E1812] border border-white/[0.06] rounded-xl p-4 flex items-center justify-between hover:bg-white/[0.03] transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-xl">🇮🇳</span>
+                      <span className="text-[16px] font-medium text-[#F5F0E8]">{spaciaCountryCode}</span>
+                      <span className="w-[1px] h-4 bg-white/[0.1]" />
+                      <span className="text-[16px] font-medium text-[#F5F0E8]">India</span>
+                    </div>
+                    <ChevronDown size={18} className="text-white/50" />
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="text-[12px] font-semibold uppercase tracking-wider text-white/55">Phone Number</div>
+                  <div className="relative flex items-center w-full bg-[#1E1812] border border-amber-500/50 rounded-xl overflow-hidden focus-within:border-amber-500 focus-within:shadow-[0_0_0_1px_rgba(245,158,11,0.5)] transition-all">
+                    <div className="pl-4 pr-3 flex items-center justify-center text-amber-500">
+                      <Phone size={18} />
+                    </div>
+                    <div className="flex items-center gap-2 py-4">
+                      <span className="text-[18px] text-white/60 select-none">{spaciaCountryCode}</span>
+                      <span className="w-[1px] h-4 bg-white/[0.1] select-none" />
+                    </div>
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      className="flex-1 bg-transparent border-none text-[#F5F0E8] text-[18px] focus:ring-0 placeholder:text-white/25 py-4 px-2 tracking-wide outline-none"
+                      placeholder="00000 00000"
+                      value={spaciaPhoneDigits.length > 5 ? `${spaciaPhoneDigits.slice(0,5)} ${spaciaPhoneDigits.slice(5,10)}` : spaciaPhoneDigits}
+                      onChange={(e) => {
+                        setSpaciaError(null);
+                        const d = e.target.value.replace(/\D/g, '').slice(0, 10);
+                        setSpaciaPhoneDigits(d);
+                      }}
+                    />
+                  </div>
+                  <div className="text-[12px] text-white/45 flex items-center gap-2">
+                    <Info size={14} />
+                    We&apos;ll send a 6-digit OTP to verify your number
+                  </div>
+                  {spaciaError && (
+                    <div className="text-[12px] font-semibold text-red-400">{spaciaError}</div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={spaciaSendLoading || spaciaPhoneDigits.length !== 10}
+                  onClick={async () => {
+                    if (spaciaSendLoading) return;
+                    if (spaciaPhoneDigits.length !== 10) {
+                      setSpaciaError('Phone number must be exactly 10 digits.');
+                      return;
+                    }
+                    setSpaciaSendLoading(true);
+                    setSpaciaError(null);
+                    try {
+                      const phoneNumber = spaciaPhoneDigits;
+                      const res = await fetch(buildApiUrl('/api/send-otp'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phoneNumber }),
+                      });
+                      const data = await res.json().catch(() => ({}));
+                      if (!res.ok || data?.ok !== true) throw new Error(data?.error || 'Failed to send OTP.');
+                      setSpaciaOtpDigits(['','','','','','']);
+                      setSpaciaTimer(30);
+                      setCurrentView('verify');
+                      setTimeout(() => spaciaOtpRefs.current[0]?.focus(), 60);
+                    } catch (e) {
+                      setSpaciaError(e instanceof Error ? e.message : 'Failed to send OTP.');
+                    } finally {
+                      setSpaciaSendLoading(false);
+                    }
+                  }}
+                  className="w-full mt-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-black/90 font-semibold rounded-xl py-4 px-6 flex items-center justify-center gap-2 shadow-[0_4px_12px_rgba(245,158,11,0.2)] transition-all active:scale-[0.98] disabled:opacity-55 disabled:cursor-not-allowed"
+                >
+                  {spaciaSendLoading ? 'Sending…' : 'Send OTP'}
+                  <ArrowRight size={18} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* ── SPACIA OTP VERIFY VIEW (Vite UI) ─────────────────────────────── */}
+      {currentView === 'verify' && (
+        <motion.div
+          key="spacia-verify"
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ duration: 0.3, ease: 'easeOut' }}
+          className="absolute inset-0 bg-[#1A1510] text-[#F5F0E8]"
+        >
+          <div className="absolute inset-0 pointer-events-none">
+            <div
+              className="absolute inset-0 h-[45%]"
+              style={{
+                backgroundImage:
+                  "url('https://lh3.googleusercontent.com/aida-public/AB6AXuA23YRBDcLoz_fSV-y03CgWk4JgBalAtUGz6obRdPoZHox2ZrhB1DQyXfCQ9ku1wtdXSIeweC0Yqemv2mzzPbxGX_fQTUj-HXylG39k0o99LgD1kJZdKvFk1-0YyUiInNfvQJiUXjZin1Ynn9PaOqpUQWCPiCCX9bCuc1YWOkCrwyv-pY5kMi__Y80_HXamUxjSoLwJ-EfNTcot9DW7aMMmYAdMCQe-GnXxvRiIMDxrVmzd7M7N_R2OJdupTkG9g19Uwc5K6ksGmvsu')",
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+              }}
+            />
+            <div className="absolute inset-0 bg-gradient-to-b from-[#1A1510]/55 via-[#1A1510]/95 to-[#1A1510]" />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 60% 30% at 50% 0%, rgba(232,135,58,0.10) 0%, transparent 100%)' }} />
+          </div>
+
+          <div className="relative z-10 flex flex-col min-h-screen px-5 pt-[max(env(safe-area-inset-top),16px)] pb-[max(env(safe-area-inset-bottom),16px)] max-w-[460px] mx-auto">
+            <button
+              type="button"
+              onClick={() => setCurrentView('login')}
+              className="w-[42px] h-[42px] rounded-full bg-white/5 border border-white/10 flex items-center justify-center backdrop-blur-md active:scale-95 transition-transform"
+              aria-label="Go back"
+              disabled={spaciaVerifyLoading}
+            >
+              <ArrowLeft size={18} />
+            </button>
+
+            <div className="flex flex-col items-center mt-8 mb-5">
+              <div className="w-[50px] h-[50px] rounded-[14px] bg-[#E8873A] grid grid-cols-2 gap-1 p-2.5 shadow-lg shadow-black/20">
+                <div className="bg-white rounded-sm" />
+                <div className="bg-white rounded-sm" />
+                <div className="bg-white rounded-sm" />
+                <div className="bg-white rounded-sm" />
+              </div>
+              <div className="text-[22px] text-[#F5F0E8] mt-3 font-semibold">Vision</div>
+              <div className="w-[28px] h-[1.5px] bg-[#E8873A] mt-2 rounded-full" />
+            </div>
+
+            <div className="flex flex-col items-center text-center mb-6">
+              <div className="text-[30px] font-bold text-[#F5F0E8] mb-1">Verify Number</div>
+              <div className="text-[14px] text-white/55 mb-2">OTP sent to {spaciaCountryCode}{spaciaPhoneDigits}</div>
+              <button
+                type="button"
+                onClick={() => setCurrentView('login')}
+                className="text-[13px] text-[#E8873A] underline decoration-[#E8873A]/50"
+              >
+                Change number
+              </button>
+            </div>
+
+            <div className="bg-[#252018]/80 border border-white/5 rounded-[20px] p-[24px_18px] shadow-2xl shadow-black/40 backdrop-blur-md flex flex-col items-center w-full mb-6">
+              <div className="flex gap-2 w-full justify-center mb-6">
+                {spaciaOtpDigits.map((d, idx) => (
+                  <div
+                    key={idx}
+                    className={[
+                      'w-[44px] h-[58px] bg-[#1E1812] rounded-[12px] flex items-center justify-center relative',
+                      idx === 0 ? '' : '',
+                      idx === 0 ? '' : '',
+                      idx === 0 ? '' : '',
+                      idx === 0 ? '' : '',
+                      idx === 0 ? '' : '',
+                      idx === 0 ? '' : '',
+                      idx === spaciaOtpDigits.findIndex((x) => x === '') ? 'border-[1.5px] border-[#E8873A] shadow-[0_0_12px_rgba(232,135,58,0.3)]' : d ? 'border-[1.5px] border-[#E8873A] shadow-[0_0_8px_rgba(232,135,58,0.2)]' : 'border border-white/10',
+                    ].join(' ')}
+                  >
+                    <input
+                      ref={(el) => { spaciaOtpRefs.current[idx] = el; }}
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={1}
+                      disabled={spaciaVerifyLoading}
+                      value={d}
+                      className="absolute inset-0 w-full h-full bg-transparent text-center text-[26px] font-semibold outline-none text-[#F5F0E8] caret-transparent"
+                      aria-label={`OTP digit ${idx + 1}`}
+                      onChange={(e) => {
+                        setSpaciaError(null);
+                        const val = e.target.value.replace(/\D/g, '').slice(-1);
+                        setSpaciaOtpDigits((prev) => {
+                          const next = [...prev];
+                          next[idx] = val;
+                          return next;
+                        });
+                        if (val && idx < 5) spaciaOtpRefs.current[idx + 1]?.focus();
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Backspace') {
+                          if (spaciaOtpDigits[idx]) {
+                            setSpaciaOtpDigits((prev) => {
+                              const next = [...prev];
+                              next[idx] = '';
+                              return next;
+                            });
+                          } else if (idx > 0) {
+                            spaciaOtpRefs.current[idx - 1]?.focus();
+                          }
+                        }
+                      }}
+                      onPaste={(e) => {
+                        e.preventDefault();
+                        const text = e.clipboardData.getData('text');
+                        const clean = text.replace(/\D/g, '').slice(0, 6);
+                        if (!clean) return;
+                        setSpaciaOtpDigits(clean.split('').concat(Array(6 - clean.length).fill('')));
+                        const focusAt = Math.min(5, clean.length);
+                        setTimeout(() => spaciaOtpRefs.current[focusAt]?.focus(), 0);
+                      }}
+                    />
+                    {idx === spaciaOtpDigits.findIndex((x) => x === '') && !d && (
+                      <span className="text-[#E8873A] text-[26px] animate-pulse">|</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center text-[13px] gap-1 text-white/55">
+                {spaciaTimer > 0 ? (
+                  <>
+                    <span>Didn&apos;t receive it?</span>
+                    <span className="text-white/35 font-semibold">Resend in 0:{String(spaciaTimer).padStart(2, '0')}</span>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (spaciaSendLoading) return;
+                      setSpaciaSendLoading(true);
+                      setSpaciaError(null);
+                      try {
+                        const phoneNumber = spaciaPhoneDigits;
+                        const res = await fetch(buildApiUrl('/api/send-otp'), {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ phoneNumber }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok || data?.ok !== true) throw new Error(data?.error || 'Failed to resend OTP.');
+                        setSpaciaTimer(30);
+                      } catch (e) {
+                        setSpaciaError(e instanceof Error ? e.message : 'Failed to resend OTP.');
+                      } finally {
+                        setSpaciaSendLoading(false);
+                      }
+                    }}
+                    className="text-[#E8873A] font-semibold underline decoration-[#E8873A]/50"
+                    disabled={spaciaSendLoading}
+                  >
+                    {spaciaSendLoading ? 'Resending…' : 'Resend OTP'}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {spaciaError && (
+              <div className="text-[12px] font-semibold text-red-400 text-center mb-2">{spaciaError}</div>
+            )}
+
+            <div className="mt-auto flex flex-col gap-5">
+              <button
+                type="button"
+                disabled={spaciaVerifyLoading || spaciaOtpDigits.some((x) => !x)}
+                onClick={async () => {
+                  if (spaciaVerifyLoading) return;
+                  if (spaciaOtpDigits.some((x) => !x)) return;
+                  setSpaciaVerifyLoading(true);
+                  setSpaciaError(null);
+                  try {
+                    const phoneNumber = spaciaPhoneDigits;
+                    const otp = spaciaOtpDigits.join('');
+                    const res = await fetch(buildApiUrl('/api/verify-otp'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ phoneNumber, otp }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data?.ok !== true) throw new Error(data?.error || 'Invalid OTP. Please try again.');
+                    persistSpaciaSessionAfterVerify(data);
+                    setCurrentView('home');
+                  } catch (e) {
+                    setSpaciaError(e instanceof Error ? e.message : 'Invalid OTP. Please try again.');
+                    setSpaciaOtpDigits(['','','','','','']);
+                    setTimeout(() => spaciaOtpRefs.current[0]?.focus(), 60);
+                  } finally {
+                    setSpaciaVerifyLoading(false);
+                  }
+                }}
+                className="w-full h-[56px] rounded-[14px] flex items-center justify-center gap-2 font-semibold text-white text-[16px] bg-gradient-to-br from-[#E8873A] to-[#C45E18] shadow-[0_10px_28px_rgba(0,0,0,0.35)] transition-all active:scale-[0.98] disabled:opacity-55 disabled:cursor-not-allowed"
+              >
+                {spaciaVerifyLoading ? 'Verifying…' : 'Verify & Continue'}
+                <ArrowRight size={18} />
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {!(isMobileHome && (isMobileNavOpen || currentView === 'profile' || currentView === 'createPost' || currentView === 'followers' || currentView === 'settings' || currentView === 'gallery')) && (
+        <div
+          style={{
+            position: 'fixed',
+            right: isMobileHome ? 12 : 20,
+            bottom: isMobileHome ? 92 : 22,
+            zIndex: 70,
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Support"
+            title="Support"
+            onClick={() => setSupportModalOpen(true)}
+            className="flex h-[64px] w-[64px] items-center justify-center bg-transparent text-white shadow-[0_10px_24px_rgba(0,0,0,0.35)]"
+            style={{ borderRadius: 0 }}
+          >
+            <Headset size={24} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+
+      {supportModalOpen && (
+        <div
+          onClick={closeSupportModal}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 120,
+            background: 'rgba(0,0,0,0.42)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '18px 12px',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={handleSupportTouchStart}
+            onTouchMove={handleSupportTouchMove}
+            onTouchEnd={handleSupportTouchEnd}
+            onTouchCancel={handleSupportTouchEnd}
+            style={{
+              width: 'min(460px, calc(100vw - 24px))',
+              borderRadius: '24px',
+              background: 'rgba(16,16,18,0.86)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              boxShadow: '0 24px 64px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.12)',
+              backdropFilter: 'blur(22px)',
+              WebkitBackdropFilter: 'blur(22px)',
+              padding: '18px 16px 16px',
+              transform: `translateY(${supportDragY}px)`,
+              transition: supportDragY > 0 ? 'none' : 'transform 220ms ease',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: '20px', fontWeight: 600, color: '#f5f5f5', lineHeight: 1.2 }}>
+                  Need Help? Contact Us
+                </div>
+                <div style={{ marginTop: 4, fontFamily: "'Inter', sans-serif", fontSize: '12px', color: 'rgba(255,255,255,0.72)' }}>
+                  We&apos;re here to assist you anytime
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeSupportModal}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: 'rgba(255,255,255,0.85)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+                aria-label="Close contact support"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <a
+              href="tel:+918056539544"
+              onClick={(e) => {
+                e.preventDefault();
+                window.location.href = 'tel:+918056539544';
+              }}
+              style={{
+                marginTop: 14,
+                minHeight: 56,
+                width: '100%',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.18)',
+                background: 'rgba(255,255,255,0.08)',
+                padding: '12px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                textDecoration: 'none',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: 12, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+                <Phone size={16} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#fff' }}>Call Support</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>8056539544</div>
+              </div>
+            </a>
+
+            <a
+              href="https://mail.google.com/mail/?view=cm&fs=1&to=visionsupport@tatvaops.com&su=TatvaOps%20Support%20Request&body=Hi%20TatvaOps%20Support%2C%0A%0AIssue%20details%3A%0A"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                marginTop: 10,
+                minHeight: 56,
+                width: '100%',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.18)',
+                background: 'rgba(255,255,255,0.08)',
+                padding: '12px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                textDecoration: 'none',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: 12, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+                <Mail size={16} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#fff' }}>Email Support</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>visionsupport@tatvaops.com</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 2 }}>Response within 24 hrs</div>
+              </div>
+            </a>
+
+            <div
+              style={{
+                marginTop: 10,
+                minHeight: 56,
+                width: '100%',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'rgba(255,255,255,0.04)',
+                padding: '12px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                boxSizing: 'border-box',
+                opacity: 0.55,
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: 12, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.16)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+                <MessageCircle size={16} />
+              </div>
+              <div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#fff' }}>Chat Support</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>Coming Soon</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

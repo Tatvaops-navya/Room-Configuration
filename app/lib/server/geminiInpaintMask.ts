@@ -31,7 +31,7 @@ function toDataUrl(mimeType: string, base64: string): string {
 }
 
 /** Blend model output with source: mask luminance = alpha (white = use output). Guarantees unchanged pixels outside the mask. */
-async function compositeAddOutputOntoSource(
+export async function compositeAddOutputOntoSource(
   outputDataUrl: string,
   sourceDataUrl: string,
   maskDataUrl: string,
@@ -770,84 +770,7 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
       return { ok: false, error: first.error || 'Image generation failed', status: first.status || 502 }
     }
 
-    if (operation === 'add') {
-      const placementRetryHint =
-        'CRITICAL RETRY: The previous result did not show a clear new object inside the bright mask, or it changed areas outside the mask, or showed halos / wrong floor vs rug. Regenerate: object strictly inside the bright mask only; pixels outside identical to the first image; continue existing rug or floor texture under the object; contact shadow matches room light; no pasted catalog cutout, no double floor pattern at the edge.'
-
-      const processAddOutput = async (rawOutputUrl: string): Promise<string> => {
-        const composited = await compositeAddOutputOntoSource(rawOutputUrl, imageDataUrl, maskDataUrl)
-        return composited ?? rawOutputUrl
-      }
-
-      let workingUrl = await processAddOutput(first.imageUrl)
-
-      let change = await maskedRegionMeanAbsDiff(imageDataUrl, workingUrl, maskDataUrl)
-      if (change.corePixels >= ADD_MIN_CORE_PIXELS && change.mean < ADD_MIN_MEAN_ABS_DIFF) {
-        const retry = await callModel(placementRetryHint)
-        if (retry.imageUrl) {
-          const w2 = await processAddOutput(retry.imageUrl)
-          if (w2) {
-            workingUrl = w2
-            change = await maskedRegionMeanAbsDiff(imageDataUrl, workingUrl, maskDataUrl)
-          }
-        }
-      }
-
-      if (change.corePixels >= ADD_MIN_CORE_PIXELS && change.mean < ADD_MIN_MEAN_ABS_DIFF) {
-        return {
-          ok: false,
-          error: 'Unable to place object in selected area. Please try again.',
-          status: 422,
-        }
-      }
-
-      // Guard against tiny/partial inserts (common "small card-like add" failure).
-      if (isLikelyFloorStandingPrompt(userPrompt)) {
-        const fp = await maskedChangedFootprint(imageDataUrl, workingUrl, maskDataUrl)
-        if (fp.maskPixels >= 1200 && (fp.changedRatio < 0.08 || fp.bboxAreaRatio < 0.16)) {
-          const retry = await callModel(
-            'RETRY SIZE/PLACEMENT FIX: the inserted object is too small/partial for the selected region. Re-render one complete object at practical in-scene size, grounded on the floor, occupying a substantial part of the masked area (roughly 25% to 60% of mask footprint) while keeping natural margins. Do not output a tiny distant object. No white/gray panel.'
-          )
-          if (retry.imageUrl) {
-            workingUrl = await processAddOutput(retry.imageUrl)
-          }
-        }
-      }
-
-      const artifact = await hasAddWhiteBackgroundArtifact(workingUrl, imageDataUrl, maskDataUrl)
-      const flatCard = await hasFlatCardArtifact(workingUrl, maskDataUrl)
-      const studioFloor = await hasAddStudioFloorArtifact(workingUrl, imageDataUrl, maskDataUrl)
-      if (artifact || flatCard || studioFloor) {
-        const retry = await callModel(
-          'RETRY FIX REQUIRED: previous output looked like a product card / white patch / flat pasted cutout / fake studio floor under the object. Regenerate as true in-scene insertion with ZERO white/gray rectangular panel, ZERO studio backdrop, and ZERO bright floor slab under the object. Preserve original floor/wall texture under and around the object. Place content strictly inside the bright mask only; pixels outside the mask must match the first image exactly. If natural insertion is uncertain, keep original room pixels rather than introducing any bright patch.'
-        )
-        if (retry.imageUrl) {
-          const w3 = await processAddOutput(retry.imageUrl)
-          if (w3) {
-            const change3 = await maskedRegionMeanAbsDiff(imageDataUrl, w3, maskDataUrl)
-            const flatRetry = await hasFlatCardArtifact(w3, maskDataUrl)
-            const whiteRetry = await hasAddWhiteBackgroundArtifact(w3, imageDataUrl, maskDataUrl)
-            const studioRetry = await hasAddStudioFloorArtifact(w3, imageDataUrl, maskDataUrl)
-            const cleanedRetry = await cleanAddWhiteArtifactPixels(w3, imageDataUrl, maskDataUrl)
-            if (
-              (change3.corePixels < ADD_MIN_CORE_PIXELS || change3.mean >= ADD_MIN_MEAN_ABS_DIFF) &&
-              !flatRetry &&
-              !whiteRetry &&
-              !studioRetry
-            ) {
-              return { ok: true, imageUrl: cleanedRetry }
-            }
-            // If retry still looks like a flat card, return cleaned image (removes bright panel) instead of raw bad output.
-            return { ok: true, imageUrl: cleanedRetry }
-          }
-        }
-      }
-
-      const cleanedFirst = await cleanAddWhiteArtifactPixels(workingUrl, imageDataUrl, maskDataUrl)
-      return { ok: true, imageUrl: cleanedFirst }
-    }
-
-    if (operation === 'replace' || operation === 'edit') {
+    if (operation === 'replace' || operation === 'edit' || operation === 'add') {
       const processMaskedOutput = async (rawOutputUrl: string): Promise<string> => {
         // Soft-edge compositing prevents visible split lines at mask boundary.
         const composited = await compositeAddOutputOntoSource(rawOutputUrl, imageDataUrl, maskDataUrl, {
@@ -859,11 +782,7 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
       let workingUrl = await processMaskedOutput(first.imageUrl)
       let replaceChange = await maskedRegionMeanAbsDiff(imageDataUrl, workingUrl, maskDataUrl)
 
-      if (
-        operation === 'replace' &&
-        replaceChange.corePixels >= REPLACE_MIN_CORE_PIXELS &&
-        replaceChange.mean < REPLACE_MIN_MEAN_ABS_DIFF
-      ) {
+      if (operation === 'replace' && replaceChange.corePixels >= REPLACE_MIN_CORE_PIXELS && replaceChange.mean < REPLACE_MIN_MEAN_ABS_DIFF) {
         const retry = await callModel(
           'RETRY FIX REQUIRED: replacement is incomplete. Fully delete old object pixels inside the white mask and render only the new subject there. No old subject remnants, no overlap, no blend/ghost. White mask area must clearly change to one coherent replacement; black mask must remain identical to source.'
         )
@@ -891,6 +810,13 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
       // Always run a final white-card cleanup pass for replace/edit before returning.
       const finalClean = await cleanAddWhiteArtifactPixels(workingUrl, imageDataUrl, maskDataUrl)
       return { ok: true, imageUrl: finalClean }
+    }
+
+    if (operation === 'erase') {
+      const composited = await compositeAddOutputOntoSource(first.imageUrl, imageDataUrl, maskDataUrl, {
+        hardMask: true,
+      })
+      return { ok: true, imageUrl: composited ?? first.imageUrl }
     }
 
     return { ok: true, imageUrl: first.imageUrl }

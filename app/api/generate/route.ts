@@ -1,13 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { buildPrompt, buildPromptSummary, getPaletteInstruction } from '@/app/utils/promptBuilder'
+import { compositeAddOutputOntoSource } from '@/app/lib/server/geminiInpaintMask'
 
 /** Timeouts for Gemini API (ms). Image generation can take 60–120+ seconds. */
 const GEMINI_TEXT_TIMEOUT_MS = 120_000
 const GEMINI_IMAGE_TIMEOUT_MS = 180_000
 const GEMINI_RETRY_ATTEMPTS = 2
 const GEMINI_RETRY_DELAY_MS = 3000
-const DEFAULT_FALLBACK_IMAGE_MODEL = 'gemini-2.5-flash-preview-05-20'
+const DEFAULT_FALLBACK_IMAGE_MODEL = 'models/gemini-3.1-flash-preview'
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': 'https://internalconfigf.vercel.app',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+  Vary: 'Origin',
+}
 
 function isRetryableNetworkError(err: unknown): boolean {
   if (err instanceof Error) {
@@ -148,8 +155,10 @@ function resolveAspectRatio(roomImageParts: { inlineData: { data: string; mimeTy
 function resolveFallbackImageModel(primaryImageModel: string): string | null {
   const configured = process.env.GEMINI_FALLBACK_IMAGE_MODEL?.trim()
   const candidate = configured || DEFAULT_FALLBACK_IMAGE_MODEL
-  if (!candidate || candidate === primaryImageModel) return null
-  return candidate
+  const normalizedPrimary = primaryImageModel.replace(/^models\//, '').trim()
+  const normalizedCandidate = candidate.replace(/^models\//, '').trim()
+  if (!normalizedCandidate || normalizedCandidate === normalizedPrimary) return null
+  return normalizedCandidate
 }
 
 /**
@@ -213,6 +222,77 @@ async function ensureImageMatchesInputSize(
     `[Generate] Fitting output ${generatedDims.width}x${generatedDims.height} → canvas ${targetDims.width}x${targetDims.height} (fit=${fit})`
   )
   return resizeDataUrlToDimensions(generatedDataUrl, targetDims.width, targetDims.height, fit, position)
+}
+
+/**
+ * Detect major geometry/layout drift between source and generated images.
+ * Uses strong-edge mismatch in upper/mid frame where architecture dominates.
+ * Returns 0..1 (higher = more drift), or null when it cannot be computed.
+ */
+async function estimateLayoutDriftScore(
+  sourceDataUrl: string,
+  generatedDataUrl: string
+): Promise<number | null> {
+  try {
+    const sourceBase64 = sourceDataUrl.includes(',') ? sourceDataUrl.split(',')[1] : sourceDataUrl
+    const generatedBase64 = generatedDataUrl.includes(',')
+      ? generatedDataUrl.split(',')[1]
+      : generatedDataUrl
+    if (!sourceBase64 || !generatedBase64) return null
+
+    const sourceBuffer = Buffer.from(sourceBase64, 'base64')
+    const generatedBuffer = Buffer.from(generatedBase64, 'base64')
+    const meta = await sharp(sourceBuffer).metadata()
+    const width = meta.width ?? 0
+    const height = meta.height ?? 0
+    if (width < 64 || height < 64) return null
+
+    const sourceEdges = await sharp(sourceBuffer)
+      .resize(width, height, { fit: 'fill' })
+      .greyscale()
+      .normalize()
+      .convolve({
+        width: 3,
+        height: 3,
+        kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1],
+      })
+      .raw()
+      .toBuffer()
+
+    const generatedEdges = await sharp(generatedBuffer)
+      .resize(width, height, { fit: 'fill' })
+      .greyscale()
+      .normalize()
+      .convolve({
+        width: 3,
+        height: 3,
+        kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1],
+      })
+      .raw()
+      .toBuffer()
+
+    const yStart = Math.floor(height * 0.08)
+    const yEnd = Math.floor(height * 0.78)
+    let union = 0
+    let mismatch = 0
+    const edgeThreshold = 92
+
+    for (let y = yStart; y < yEnd; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x
+        const srcStrong = sourceEdges[i] >= edgeThreshold
+        const genStrong = generatedEdges[i] >= edgeThreshold
+        if (!srcStrong && !genStrong) continue
+        union++
+        if (srcStrong !== genStrong) mismatch++
+      }
+    }
+
+    if (union < 1000) return null
+    return mismatch / union
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -413,7 +493,8 @@ async function generateImageWithAI(
   customizationLabels?: Record<string, CustomizationLabelEntry>,
   selectedStyle?: string | null,
   selectedColorPalette?: string | null,
-  customizationReferenceImages?: CustomizationReferenceImage[]
+  customizationReferenceImages?: CustomizationReferenceImage[],
+  strictLayoutLock: boolean = true
 ): Promise<string | { imageUrl: string; warning: string }> {
   const isExternal = configType === 'external'
   const userSpaceLabel = isExternal ? "USER'S ORIGINAL PROPERTY/HOUSE" : "USER'S ROOM"
@@ -858,11 +939,34 @@ ABSOLUTE RULES:
 
       // When user selected style and/or color palette, inject them directly into the image model prompt so the output shows BOTH style and palette (palette was often missed when only in text model output)
       const styleForImage = typeof selectedStyle === 'string' && selectedStyle.trim() ? selectedStyle.trim() : null
+      const isOdishaStyle = !!styleForImage && styleForImage.trim().toLowerCase() === 'odisha'
+      const isMaharashtrianStyle = !!styleForImage && styleForImage.trim().toLowerCase() === 'maharashtrian'
+      const isPunjabiStyle = !!styleForImage && styleForImage.trim().toLowerCase() === 'punjabi'
+      const isIndustrialLoftStyle =
+        !!styleForImage &&
+        (styleForImage.trim().toLowerCase() === 'industrial' ||
+          styleForImage.trim().toLowerCase() === 'industrial loft')
+      const odishaStyleRule = isOdishaStyle
+        ? `- Odisha style mandatory cues: use prominently carved wooden furniture, include brass lamps and/or temple-inspired decorative elements, and keep a dominant earthy palette (brown, red, and gold). These cues must be clearly visible and not subtle.`
+        : ''
+      const maharashtrianStyleRule = isMaharashtrianStyle
+        ? `- Maharashtrian style mandatory cues: feature a jhula (swing) or a wooden sofa as a key seating element, use neutral tones accented with brass decor, and maintain a simple but richly traditional ambiance. These cues must be clearly visible and not subtle.`
+        : ''
+      const punjabiStyleRule = isPunjabiStyle
+        ? `- Punjabi style mandatory cues: include bright phulkari-style cushions, use rich wooden sofas as primary seating, and apply warm, lively colors across key furnishings and accents. These cues must be clearly visible and not subtle.`
+        : ''
+      const industrialLoftStyleRule = isIndustrialLoftStyle
+        ? `- Industrial Loft style mandatory cues: include exposed brick wall OR concrete wall, use black metal + wood furniture, feature a brown or black leather sofa, keep large windows and a clear loft-like open feel, and use slightly warm lighting. These cues must be clearly visible and not subtle.`
+        : ''
       const paletteForImage = getPaletteInstruction(selectedColorPalette)
       const stylePaletteBlock =
         !isExternal && (styleForImage || paletteForImage)
           ? `REQUIRED – APPLY BOTH IN THE OUTPUT:
 ${styleForImage ? `- Design style: ${styleForImage.charAt(0).toUpperCase() + styleForImage.slice(1)}. This style must be visually dominant and unmistakable in the final room image, with clear style-defining furniture shapes, materials, finishes, decor cues, and mood. Do NOT return a generic room with weak or subtle hints of the selected style.` : ''}
+${odishaStyleRule}
+${maharashtrianStyleRule}
+${punjabiStyleRule}
+${industrialLoftStyleRule}
 ${paletteForImage ? `- Color palette: ${paletteForImage} The image MUST visibly use these colors as the dominant palette for walls, furniture, fabrics, rugs, and accents. Do not use a different, muted, or generic color scheme.` : ''}
 - Validation requirement: if the selected style and selected color palette are not clearly visible in the final output, the result is wrong and must be regenerated.
 
@@ -877,6 +981,26 @@ STRICT STRUCTURAL SHELL LOCK (single layout photograph):
 - Treat the photograph as a fixed 3D shell + camera: same silhouette when toggling before/after. Preserve every wall plane, corner, ceiling line, stair flight (presence, direction, tread count/angle), landing, column, beam, and rough-construction zone in the same place. Do NOT add a wooden staircase, new handrail system, new mezzanine, or new full-height cabinet wall where the upload does not show one.
 - Do NOT add, remove, relocate, resize, or merge doorways, windows, arches, or glazed openings. Do NOT block a window or door with new built-ins. Style (regional, traditional, modern) is finishes + furniture + rugs + surface-mounted lighting only—never new permanent architecture.
 - Movable furniture and decor must fit inside the existing floor/wall envelope; do not change room proportions or camera framing beyond the pixel lock below.
+`
+          : ''
+      const strictObjectConservationInterior =
+        !isExternal && !isCustomizationMode
+          ? `
+OBJECT CONSERVATION (style update, not object injection):
+- Keep the same major furniture inventory and approximate placement from the input room. Do NOT invent extra large objects or duplicate furniture pieces.
+- Do NOT add new TV units, extra sofas/chairs, cabinets, beds, dining sets, partitions, decor clusters, statues, or lighting fixtures unless explicitly requested in user instructions.
+- Prefer restyling existing objects (material, color, upholstery, texture, finish) over replacing or adding new ones.
+`
+          : ''
+      const ultraLayoutInvarianceInterior =
+        !isExternal && !isCustomizationMode && strictLayoutLock
+          ? `
+STRICT LAYOUT INVARIANCE (HIGHEST PRIORITY):
+- The output must keep IDENTICAL room geometry as the input photo: same wall positions, corner junctions, opening sizes, sill heights, beam/soffit lines, staircase geometry, and corridor widths.
+- Preserve exact door/window count, placement, and proportions. Do NOT shift, widen, narrow, raise/lower, or invent openings.
+- Keep the same floor-plane boundaries and perspective convergence. Do NOT alter camera height, camera tilt, lens feel, or viewpoint.
+- For unfinished / construction-stage rooms: preserve the same shell and structural state; do not reconstruct architecture into a different layout.
+- If any style instruction conflicts with geometry preservation, ALWAYS keep geometry unchanged and reduce style intensity instead.
 `
           : ''
 
@@ -895,6 +1019,8 @@ ${stylePaletteBlock}
 ROOM (from uploaded images – reproduce exactly):
 ${structSnippet || 'Same room as the uploaded image.'}
 ${strictShellLockInterior}
+${strictObjectConservationInterior}
+${ultraLayoutInvarianceInterior}
 ARCHITECTURE LOCK (MUST NOT CHANGE):
 - Do NOT add, remove, move, resize, open/close, or replace any doors, windows, glass doors, glass partitions, wall openings, corridors, or fixed built-ins.
 - Keep the exact same walls, floor boundaries, ceiling shape, and all structural/fixed elements exactly as in the uploaded images.
@@ -1029,6 +1155,11 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
 - Your output MUST be NON-SQUARE with the same framing proportions.
 - DO NOT return a square image (1:1).`
     const strictShapeRequestBody = buildImageRequestBody(STRICT_NON_SQUARE_CONSTRAINT)
+    const sourceDataUrl = roomImageParts[0]?.inlineData?.data
+      ? `data:${roomImageParts[0].inlineData.mimeType || 'image/png'};base64,${roomImageParts[0].inlineData.data}`
+      : null
+    const shouldGuardLayoutDrift =
+      !isExternal && !isCustomizationMode && strictLayoutLock !== false && images.length === 1
 
     /** Call image API with a given model/body. Can reject unexpected square outputs. */
     const callImageModel = async (
@@ -1100,6 +1231,23 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
       primaryResult = await callImageModel(primaryImageModel, strictShapeRequestBody, { rejectUnexpectedSquare: true })
     }
     let imageUrl = primaryResult.imageUrl
+    if (imageUrl && shouldGuardLayoutDrift && sourceDataUrl) {
+      const drift = await estimateLayoutDriftScore(sourceDataUrl, imageUrl)
+      if (drift != null && drift >= 0.5) {
+        console.warn(
+          `[Generate] Layout drift detected (score=${drift.toFixed(3)}). Retrying with stronger structural lock.`
+        )
+        const layoutRetryBody = buildImageRequestBody(
+          'RETRY — HARD STRUCTURE LOCK: Previous output changed architecture/layout. Regenerate as the SAME exact room shell and camera from the first room image. Do NOT alter staircase geometry, doorway/window/opening positions, wall planes, ceiling lines, or corridor widths. Keep unfinished/construction shell state unchanged; only restyle furniture/decor/finishes.'
+        )
+        const retry = await callImageModel(primaryImageModel, layoutRetryBody, {
+          rejectUnexpectedSquare: true,
+        })
+        if (retry.imageUrl) {
+          imageUrl = retry.imageUrl
+        }
+      }
+    }
     if (imageUrl) {
       // For locked-layout mode, keep the model's native size exactly (no resize to input dimensions).
       if (useLockedLayoutOnly) {
@@ -1268,6 +1416,13 @@ export const maxDuration = 300
 /**
  * POST handler for image generation
  */
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  })
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Parse request body
@@ -1292,6 +1447,7 @@ export async function POST(request: NextRequest) {
       externalCustomization,
       selectedStyle,
       selectedColorPalette,
+      strictLayoutLock = true,
       layoutImageIndex,
       eraseRegion, // optional: { x, y, width, height } normalized 0–1 for image-based erase (inpainting)
       eraseMode, // optional: 'region' | 'full-components'
@@ -1433,6 +1589,17 @@ export async function POST(request: NextRequest) {
       try {
         const { buffer: maskBuffer } = await createEraseMaskImage(sourceBuffer, eraseRegion)
         const maskB64 = maskBuffer.toString('base64')
+        const maskDataUrl = `data:image/png;base64,${maskB64}`
+        const sourceDataUrlForBlend =
+          typeof sourceImageUrl === 'string' && sourceImageUrl.includes(',')
+            ? sourceImageUrl.trim()
+            : `data:${sourceMime};base64,${sourceBuffer.toString('base64')}`
+        const blendEraseToMask = async (outDataUrl: string): Promise<string> => {
+          const blended = await compositeAddOutputOntoSource(outDataUrl, sourceDataUrlForBlend, maskDataUrl, {
+            hardMask: true,
+          })
+          return blended ?? outDataUrl
+        }
         const isFullComponentsErase = eraseMode === 'full-components'
         const inpaintingPrompt = isFullComponentsErase
           ? DESIGN_CONTEXT_PREFIX +
@@ -1491,6 +1658,7 @@ export async function POST(request: NextRequest) {
             const mime = part.inlineData.mimeType || 'image/png'
             let dataUrl = `data:${mime};base64,${part.inlineData.data}`
             dataUrl = await ensureImageMatchesInputSize(dataUrl, roomImagePartsForErase)
+            dataUrl = await blendEraseToMask(dataUrl)
             return NextResponse.json({ imageUrl: dataUrl })
           }
         }
@@ -1508,6 +1676,7 @@ export async function POST(request: NextRequest) {
               const mime = part.inlineData.mimeType || 'image/png'
               let dataUrl = `data:${mime};base64,${part.inlineData.data}`
               dataUrl = await ensureImageMatchesInputSize(dataUrl, roomImagePartsForErase)
+              dataUrl = await blendEraseToMask(dataUrl)
               return NextResponse.json({ imageUrl: dataUrl })
             }
           }
@@ -1731,7 +1900,8 @@ The SINGLE image provided below is the CURRENT RESULT. Your output MUST be this 
       customizationLabels && typeof customizationLabels === 'object' ? customizationLabels : undefined,
       selectedStyle ?? undefined,
       selectedColorPalette ?? undefined,
-      customizationReferenceImages.length > 0 ? customizationReferenceImages : undefined
+      customizationReferenceImages.length > 0 ? customizationReferenceImages : undefined,
+      strictLayoutLock !== false
     )
 
     const imageUrl = typeof result === 'string' ? result : result.imageUrl

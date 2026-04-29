@@ -173,14 +173,17 @@ function capturePercentRectToEraseRegion(
   panelH: number,
   naturalW: number,
   naturalH: number,
-  rectPct: { x: number; y: number; w: number; h: number }
+  rectPct: { x: number; y: number; w: number; h: number },
+  options?: { yAnchorRatio?: number }
 ) {
   if (!naturalW || !naturalH || !panelW || !panelH) return null;
   const scale = Math.min(panelW / naturalW, panelH / naturalH);
   const renderedW = naturalW * scale;
   const renderedH = naturalH * scale;
   const offsetX = (panelW - renderedW) / 2;
-  const offsetY = (panelH - renderedH) / 2;
+  const freeY = panelH - renderedH;
+  const anchor = Math.max(0, Math.min(1, options?.yAnchorRatio ?? 0.5));
+  const offsetY = freeY * anchor;
   const left = (rectPct.x / 100) * panelW;
   const top = (rectPct.y / 100) * panelH;
   const pw = (rectPct.w / 100) * panelW;
@@ -209,6 +212,7 @@ const STRICT_PROMPT_OBJECT_RULES = [
   'If prompt is partially unclear, keep all specified attributes unchanged and infer only missing details.',
   'Output must be one realistic component with correct proportions, placed only inside the selected mask area.',
 ].join(' ');
+const MOBILE_IMAGE_Y_ANCHOR = 0.42;
 
 function buildStrictPromptObjectInstruction(userInput: string): string {
   const trimmed = userInput.trim();
@@ -276,9 +280,13 @@ export function GenerationResults({
   generationHistoryRaw = [],
   onGenerationHistoryAppend,
 }: GenerationResultsProps) {
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [mobileRightPanelOpen, setMobileRightPanelOpen] = useState(false);
   const [activeTab,        setActiveTab]        = useState<'color' | 'style'>('color');
   const [selectedPalette,  setSelectedPalette]  = useState<string | null>(null);
   const [selectedStyle,    setSelectedStyle]    = useState<string>('Modern');
+  const [strictLayoutLockEnabled, setStrictLayoutLockEnabled] = useState(true);
   const [selectedColorDots, setSelectedColorDots] = useState<string[] | null>(null);
   const [customPanelTab, setCustomPanelTab] = useState<'Style' | 'Colour' | 'Material'>('Style');
   const [selectedMaterial, setSelectedMaterial] = useState<string | null>(null);
@@ -294,6 +302,38 @@ export function GenerationResults({
   useEffect(() => {
     if (generationHistory.length === 0) setShowHistoryPanel(false);
   }, [generationHistory.length]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile) {
+      setMobileHistoryOpen(false);
+      setMobileRightPanelOpen(false);
+      return;
+    }
+    // Preserve existing behavior: open history only when explicitly requested.
+    setMobileHistoryOpen(false);
+    // Keep right panel closed by default on mobile so preview is visible first.
+    setMobileRightPanelOpen(false);
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile || !isCustomisation) return;
+    const isDirectCaptureTab =
+      customActiveTab === 'Add Object' || customActiveTab === 'Replace' || customActiveTab === 'Erase';
+    // Mobile direct-capture flow: keep the left panel closed.
+    if (isDirectCaptureTab) {
+      setMobileHistoryOpen(false);
+      return;
+    }
+    setMobileHistoryOpen(customActiveTab !== null);
+  }, [isMobile, isCustomisation, customActiveTab]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   /** Add Object: same category list as Edit; drives catalog / tiles / presets in the right panel. */
   const [addSelectedCategory, setAddSelectedCategory] = useState<string | null>(null);
@@ -411,11 +451,23 @@ export function GenerationResults({
   const [captureDragOrigin, setCaptureDragOrigin] = useState<{ mx: number; my: number; rect: { x: number; y: number; w: number; h: number } } | null>(null);
   const [captureThumb, setCaptureThumb] = useState<string | null>(null);
   const [capturePixelDims, setCapturePixelDims] = useState<{ w: number; h: number } | null>(null);
+  const [showSelectedAreaEffect, setShowSelectedAreaEffect] = useState(false);
+  useEffect(() => {
+    // Keep initial selection clear; show effect only after action buttons are pressed.
+    if (selectedAction !== 'capture' || !captureLocked) {
+      setShowSelectedAreaEffect(false);
+    }
+  }, [selectedAction, captureLocked]);
 
   // Reset left panel tab when floating tab changes
   useEffect(() => {
     if (customActiveTab === 'Edit') {
       setLeftPanelTab('Object Categories');
+      if (isMobile) {
+        // Mobile Edit flow starts from the left object list.
+        setMobileHistoryOpen(true);
+        setMobileRightPanelOpen(false);
+      }
       setSelectedAction(null);
       setAddSelectedCategory(null);
       setAddObjectSubPanel(null);
@@ -429,7 +481,7 @@ export function GenerationResults({
     } else if (customActiveTab === 'Add Object') {
       setLeftPanelTab('Object Categories');
       setSelectedCategory(null);
-      setSelectedAction(null);
+      setSelectedAction(isMobile ? 'capture' : null);
       setAddSelectedCategory(null);
       setAddPanelTab('Style');
       setAddObjectSubPanel(null);
@@ -443,12 +495,24 @@ export function GenerationResults({
     } else if (customActiveTab === 'Replace') {
       setLeftPanelTab('Object Categories');
       setSelectedCategory(null);
-      setSelectedAction(null);
+      setSelectedAction(isMobile ? 'capture' : null);
       setAddSelectedCategory(null);
       setAddObjectSubPanel(null);
       setReplaceSelectedCategory(null);
       setReplacePanelTab('Style');
       setReplaceSubPanel(null);
+      setReplaceSelectedStyleSwatch(null);
+      setReplaceSelectedMaterial(null);
+      setReplaceSelectedMaterialImageUrl(null);
+      setReplaceSelectedColorDots(null);
+    } else if (customActiveTab === 'Erase') {
+      setLeftPanelTab('Action');
+      setSelectedCategory(null);
+      setSelectedAction(isMobile ? 'capture' : null);
+      setAddObjectSubPanel(null);
+      setReplaceSubPanel(null);
+      setReplaceSelectedCategory(null);
+      setReplacePanelTab('Style');
       setReplaceSelectedStyleSwatch(null);
       setReplaceSelectedMaterial(null);
       setReplaceSelectedMaterialImageUrl(null);
@@ -469,7 +533,7 @@ export function GenerationResults({
       setSelectedCategory(null);
       setSelectedAction(null);
     }
-  }, [customActiveTab]);
+  }, [customActiveTab, isMobile]);
 
   /** Keep the same catalog fetch + swatch rows while user switches Style / Colour / Material (tabs must not clear bed/sofa loads). */
   const styleCategoryForCatalog =
@@ -975,6 +1039,8 @@ export function GenerationResults({
   const [dividerPos, setDividerPos] = useState(0);
   const [labelsOpacity, setLabelsOpacity] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const dragRafRef = useRef<number | null>(null);
+  const pendingDividerPosRef = useRef<number | null>(null);
   const [placingComponent, setPlacingComponent] = useState(false);
   const [placingPhase, setPlacingPhase] = useState<'idle' | 'animating' | 'fadeout'>('idle');
   const placingStartRef = useRef<number>(0);
@@ -982,11 +1048,14 @@ export function GenerationResults({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imagePanelRef = useRef<HTMLDivElement>(null);
   const afterImageRef = useRef<HTMLImageElement>(null);
+  const [renderedImageOffset, setRenderedImageOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [renderedImageSize, setRenderedImageSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const [apiGenerating, setApiGenerating] = useState(false);
   const [apiGenerateKind, setApiGenerateKind] = useState<'regen' | 'finalize' | 'customize' | 'erase' | 'add' | 'replace' | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [apiWarning, setApiWarning] = useState<string | null>(null);
+  const [mobileFinalizeDismissed, setMobileFinalizeDismissed] = useState(false);
 
   useEffect(() => {
     const w = serverWarningOnLoad?.trim();
@@ -1049,6 +1118,46 @@ export function GenerationResults({
     return generatedImageUrl?.trim() ?? '';
   }, [generatedImageRawUrl, generatedImageUrl]);
 
+  const measureRenderedImageOffset = useCallback(() => {
+    const panel = imagePanelRef.current;
+    const img = afterImageRef.current;
+    if (!panel || !img?.naturalWidth || !img.naturalHeight) {
+      setRenderedImageOffset({ x: 0, y: 0 });
+      setRenderedImageSize({ w: 0, h: 0 });
+      return;
+    }
+    const panelW = panel.clientWidth;
+    const panelH = panel.clientHeight;
+    if (!panelW || !panelH) {
+      setRenderedImageOffset({ x: 0, y: 0 });
+      setRenderedImageSize({ w: 0, h: 0 });
+      return;
+    }
+    const scale = Math.min(panelW / img.naturalWidth, panelH / img.naturalHeight);
+    const renderedW = img.naturalWidth * scale;
+    const renderedH = img.naturalHeight * scale;
+    const offsetX = Math.max(0, (panelW - renderedW) / 2);
+    const freeY = Math.max(0, panelH - renderedH);
+    const offsetY = isMobile ? freeY * MOBILE_IMAGE_Y_ANCHOR : freeY * 0.5;
+    setRenderedImageOffset({ x: offsetX, y: offsetY });
+    setRenderedImageSize({ w: renderedW, h: renderedH });
+  }, [isMobile]);
+
+  useEffect(() => {
+    measureRenderedImageOffset();
+    const panel = imagePanelRef.current;
+    if (!panel) return;
+    const observer = new ResizeObserver(() => {
+      measureRenderedImageOffset();
+    });
+    observer.observe(panel);
+    window.addEventListener('resize', measureRenderedImageOffset);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measureRenderedImageOffset);
+    };
+  }, [measureRenderedImageOffset, generatedImageUrl, generatedImageRawUrl, showCompare]);
+
   const runGenerate = useCallback(
     async (
       opts?: { shuffle?: boolean; useCurrentResult?: boolean; silent?: boolean },
@@ -1077,6 +1186,7 @@ export function GenerationResults({
         const data = await postRoomGenerate(roomSession, selectedStyle, selectedPalette, {
           shuffle: opts?.shuffle,
           currentResultImage: useCur ? apiResultImageUrl || undefined : undefined,
+          strictLayoutLock: strictLayoutLockEnabled,
         });
         if (data.error) {
           if (mountedRef.current) setApiError(data.error);
@@ -1109,6 +1219,7 @@ export function GenerationResults({
       roomSession,
       selectedStyle,
       selectedPalette,
+      strictLayoutLockEnabled,
       generatedImageUrl,
       apiResultImageUrl,
       onGeneratedImage,
@@ -1117,9 +1228,12 @@ export function GenerationResults({
   );
 
   const handleRegenerateClick = useCallback(async () => {
+    if (isMobile) {
+      setMobileRightPanelOpen(false);
+    }
     onRegenerate?.();
     await runGenerate({ shuffle: true, useCurrentResult: !!generatedImageUrl?.trim() }, 'regen');
-  }, [onRegenerate, runGenerate, generatedImageUrl]);
+  }, [isMobile, onRegenerate, runGenerate, generatedImageUrl]);
 
   const handleFinalizeClick = useCallback(() => {
     if (!roomSession) {
@@ -1128,8 +1242,11 @@ export function GenerationResults({
       );
       return;
     }
+    if (isMobile) {
+      setMobileFinalizeDismissed(true);
+    }
     onFinalize?.();
-  }, [roomSession, onFinalize]);
+  }, [roomSession, onFinalize, isMobile]);
 
   useEffect(() => {
     if (!showScanCanvas) {
@@ -1144,8 +1261,8 @@ export function GenerationResults({
     const wrapper = imagePanelRef.current;
     if (!canvas || !wrapper) return;
 
-    const W = wrapper.offsetWidth;
-    const H = wrapper.offsetHeight;
+    const W = Math.max(1, Math.floor(renderedImageSize.w || wrapper.offsetWidth));
+    const H = Math.max(1, Math.floor(renderedImageSize.h || wrapper.offsetHeight));
     canvas.width = W;
     canvas.height = H;
     const ctx = canvas.getContext('2d');
@@ -1328,7 +1445,7 @@ export function GenerationResults({
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [imageGenKey, showScanCanvas]);
+  }, [imageGenKey, showScanCanvas, renderedImageSize.w, renderedImageSize.h]);
 
   // Entrance animation for before/after slider
   useEffect(() => {
@@ -1365,22 +1482,42 @@ export function GenerationResults({
     const panel = imagePanelRef.current;
     if (!panel) return;
 
+    const touchListenerOpts: AddEventListenerOptions = { passive: false };
+    const flushPendingDividerPos = () => {
+      if (pendingDividerPosRef.current == null) return;
+      setDividerPos(pendingDividerPosRef.current);
+      pendingDividerPosRef.current = null;
+      dragRafRef.current = null;
+    };
+
     const onMove = (ev: MouseEvent | TouchEvent) => {
+      if ('touches' in ev) ev.preventDefault();
       const rect = panel.getBoundingClientRect();
       const clientX = 'touches' in ev ? ev.touches[0].clientX : (ev as MouseEvent).clientX;
       const pct = ((clientX - rect.left) / rect.width) * 100;
-      setDividerPos(Math.max(5, Math.min(95, pct)));
+      pendingDividerPosRef.current = Math.max(5, Math.min(95, pct));
+      if (dragRafRef.current == null) {
+        dragRafRef.current = requestAnimationFrame(flushPendingDividerPos);
+      }
     };
     const onUp = () => {
       setIsDragging(false);
+      if (dragRafRef.current != null) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      if (pendingDividerPosRef.current != null) {
+        setDividerPos(pendingDividerPosRef.current);
+        pendingDividerPosRef.current = null;
+      }
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchmove', onMove, touchListenerOpts);
       window.removeEventListener('touchend', onUp);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchmove', onMove, touchListenerOpts);
     window.addEventListener('touchend', onUp);
   }, []);
 
@@ -1425,14 +1562,15 @@ export function GenerationResults({
   const afterImage = useMemo(() => {
     const gen = generatedImageUrl?.trim();
     if (!gen) {
-      return selectedImageUrl || PLACEHOLDER_ROOM_IMAGE;
+      // On first open (before first generation), prefer the locked layout image from the wizard session.
+      return layoutBefore || selectedImageUrl || PLACEHOLDER_ROOM_IMAGE;
     }
     const raw = generatedImageRawUrl?.trim();
     if (!showWatermark && raw) {
       return raw;
     }
     return gen;
-  }, [generatedImageUrl, generatedImageRawUrl, selectedImageUrl, showWatermark]);
+  }, [generatedImageUrl, generatedImageRawUrl, layoutBefore, selectedImageUrl, showWatermark]);
 
   useEffect(() => {
     setShowWatermark(true);
@@ -1689,6 +1827,10 @@ export function GenerationResults({
     }
 
     if (apiGenerating) return;
+    if (isMobile) {
+      // Mobile Edit flow: close right panel as soon as confirm is tapped.
+      setMobileRightPanelOpen(false);
+    }
 
     const hasPick =
       !!(selectedStyleSwatch?.trim()) ||
@@ -1878,6 +2020,7 @@ export function GenerationResults({
     selectedPalette,
     onGeneratedImage,
     onGenerationHistoryAppend,
+    isMobile,
   ]);
 
   const editCustomizationConfirmDisabled = useMemo(
@@ -1948,14 +2091,19 @@ export function GenerationResults({
     ]
   );
 
-  const showRightPanel =
+  const showRightPanelDesktop =
     !isCustomisation ||
     (customActiveTab === 'Edit' && selectedCategory !== null) ||
     (customActiveTab === 'Add Object' && (addSelectedCategory !== null || addObjectSubPanel !== null)) ||
     (customActiveTab === 'Replace' && (replaceSelectedCategory !== null || replaceSubPanel !== null));
+  const showRightPanel = isMobile ? mobileRightPanelOpen : showRightPanelDesktop;
+  const isMobileDirectCaptureFlow =
+    isMobile &&
+    isCustomisation &&
+    (customActiveTab === 'Add Object' || customActiveTab === 'Replace' || customActiveTab === 'Erase');
   const showEditSwitchers = isCustomisation && customActiveTab !== null;
   const historyRailCollapsed = !showEditSwitchers && !showHistoryPanel;
-  const leftHistoryRailWidth = showEditSwitchers ? 270 : showHistoryPanel ? 270 : 44;
+  const leftHistoryRailWidth = isMobile ? (mobileHistoryOpen ? 270 : 0) : (showEditSwitchers ? 270 : showHistoryPanel ? 270 : 44);
 
   const handleAddObjectApply = useCallback(async () => {
     if (customActiveTab !== 'Add Object' || apiGenerating) return;
@@ -1984,35 +2132,44 @@ export function GenerationResults({
       panel.offsetHeight,
       imgEl.naturalWidth,
       imgEl.naturalHeight,
-      captureRect
+      captureRect,
+      { yAnchorRatio: isMobile ? MOBILE_IMAGE_Y_ANCHOR : 0.5 }
     );
     if (!bbox) {
       setApiError('Selection too small or invalid. Draw a larger area on the image.');
       return;
     }
+    const horizontalRegion =
+      bbox.x + bbox.width / 2 < 0.33 ? 'left' : bbox.x + bbox.width / 2 > 0.66 ? 'right' : 'center';
+    const verticalRegion =
+      bbox.y + bbox.height / 2 < 0.33 ? 'upper' : bbox.y + bbox.height / 2 > 0.66 ? 'lower' : 'middle';
 
     let prompt = '';
-    let referenceImageDataUrl: string | undefined;
-    let promptModeFloorStanding = false;
+    let referenceImageUrl: string | undefined;
     if (addObjectSubPanel === 'uploadedComponent' && confirmedUploadImages.length > 0) {
+      const firstRef = confirmedUploadImages[0]?.trim();
+      if (firstRef) {
+        referenceImageUrl = firstRef;
+      }
       prompt = [
-        'Add one photorealistic furniture or decor piece in the white masked area, matching the user reference images in form and material — re-drawn in the room’s 3D perspective, not pasted flat.',
+        'Insert exactly ONE new photorealistic furniture/decor object completely INSIDE the white masked area. Do not move or repaint existing room objects.',
+        'Use the uploaded reference image(s) as strict shape and material guidance. Rebuild in scene perspective; never paste as a flat cutout.',
         uploadedCompColour ? `Colour hint: ${uploadedCompColour}.` : '',
-        'Match room light direction, soft contact shadow at the base, and speculars on metal/glass. Continue any rug or floor pattern under the object; no halo or duplicate texture at the mask edge. Pixels outside the mask must stay identical.',
+        'Placement rule: keep the full object (top, sides, legs/base) fully visible inside the mask with natural margin on all sides; no clipping outside mask boundaries.',
+        'Match room lighting direction, cast a natural contact shadow, preserve floor/rug continuity under/around the object, and keep all pixels outside the mask unchanged.',
       ]
         .filter(Boolean)
         .join(' ');
     } else if (addObjectSubPanel === 'generatePrompt' && generatePromptText.trim()) {
       const userPromptLc = generatePromptText.trim().toLowerCase();
       const isFloorStandingObject = /(sofa|couch|chair|armchair|recliner|table|desk|cabinet|bed|stool|bench|ottoman|bookshelf|shelf|tv unit|console|wardrobe)/.test(userPromptLc);
-      promptModeFloorStanding = isFloorStandingObject;
       prompt = [
         buildStrictPromptObjectInstruction(generatePromptText),
         STRICT_PROMPT_OBJECT_RULES,
         isFloorStandingObject
-          ? 'Placement lock for floor-standing object: place it grounded on the existing floor plane inside the selected mask. The FULL object must be completely visible inside the selected area with natural margins; no clipping/truncation of top, sides, or legs. Keep it as a clearly visible primary object (not tiny/far-away).'
-          : 'Place the requested object as the clear primary subject inside the selected mask area.',
-        'Render only inside the masked area; photorealistic; match room lighting, scale, and perspective with contact shadow. The full object must be completely visible and fit proportionally inside the selected region (no clipping/cut-off edges). Preserve existing rug/floor under the object where visible; no ghost edge at the boundary. Do NOT repaint the full selected box background. Rest of the photograph unchanged.',
+          ? 'Placement lock for floor-standing object: ground it on the existing floor plane INSIDE the selected mask and keep the entire object fully visible with natural margins (no clipped top/sides/legs).'
+          : 'Place exactly one requested object as the main subject fully inside the selected mask area with natural margins.',
+        'Hard constraints: add a NEW object only; do not repaint existing objects. Render only inside the mask, keep outside pixels unchanged, preserve floor/rug/background continuity, and avoid edge halos or cut-off boundaries.',
       ].join(' ');
     } else if (!addObjectSubPanel && addSelectedCategory) {
       const hasPick =
@@ -2029,13 +2186,18 @@ export function GenerationResults({
       if (mytylesMatch) {
         const id = Number(mytylesMatch[1]);
         const tile = editMytylesTiles.find((t) => t.id === id);
-        if (tile) styleDesc = tile.label;
+        if (tile) {
+          styleDesc = tile.label;
+        }
       } else if (addSelectedStyleSwatch?.trim()) {
         const row = catalogStyleSwatchRows.find((r) => r.k === addSelectedStyleSwatch);
-        if (row) styleDesc = row.title;
+        if (row) {
+          styleDesc = row.title;
+        }
       }
       const parts: string[] = [
-        `Apply the selected look to the ${addSelectedCategory.toLowerCase()} only (${elementType}) inside the white masked region. Keep the same room layout, camera angle, perspective, and all other surfaces and objects unchanged.`,
+        `Add exactly ONE new ${addSelectedCategory.toLowerCase()} object (${elementType}) fully inside the white masked region. This is an insertion request, not a repaint request.`,
+        'Do not edit, recolor, replace, move, or remove existing objects in the room.',
       ];
       if (styleDesc) parts.push(`Reference style / product: ${styleDesc}.`);
       if (addSelectedMaterial?.trim()) parts.push(`Material / finish: ${addSelectedMaterial.trim()}.`);
@@ -2050,35 +2212,44 @@ export function GenerationResults({
       parts.push(
         'Photorealistic, seamless blend. Match room lighting direction, perspective, and material highlights. Keep strict masked inpaint boundaries: render only in the masked area and do not modify pixels outside the mask.'
       );
-      if (elementType === 'wall' || elementType === 'floor' || elementType === 'ceiling') {
-        parts.push(
-          'If category is wall/floor/ceiling: apply transformation to the ENTIRE detected surface, not just the selected patch. Keep strict boundaries and avoid windows, curtains, wood panels, and trims.'
-        );
-      }
+      parts.push(
+        'The full inserted object must remain completely visible inside the selected mask with natural margins (no clipped or cut-off edges).'
+      );
       prompt = parts.join(' ');
     } else {
       setApiError('Select a category and style options, use Upload, or enter a text prompt before adding.');
       return;
     }
+    prompt = [
+      `INPAINTING TASK (EDIT LOGIC): modify ONLY the white masked region in this room image.`,
+      prompt,
+      `Area lock: use only the user-selected ${verticalRegion}-${horizontalRegion} capture area for the new object placement and keep the full object inside the selected box.`,
+      'Keep all pixels outside the mask unchanged exactly. Preserve the same room layout, camera framing, perspective, and existing objects.',
+    ].join(' ');
 
     const rawSource =
       (apiResultImageUrl && apiResultImageUrl.trim()) ||
       roomSession.imagesDataUrl[roomSession.layoutIndex] ||
       roomSession.imagesDataUrl[0] ||
       '';
+    const currentResultImage = rawSource.trim();
+    if (!currentResultImage) {
+      setApiError('No image to customize. Generate or upload a room image first.');
+      return;
+    }
+
     const dataUrlResult = await ensureGenerateImageDataUrl(rawSource);
     if (typeof dataUrlResult === 'object' && 'error' in dataUrlResult) {
       setApiError(dataUrlResult.error);
       return;
     }
     const imageDataUrl = dataUrlResult;
-    // Keep Add behavior aligned with Edit/Replace masked-inpaint:
-    // use the exact user selection (no add-only expansion/feather tricks).
-    const addMaskBbox = bbox;
     const addCategory = addSelectedCategory ? mapEditCategoryToApiElement(addSelectedCategory) : undefined;
-    const maskDataUrl = await createMaskFromBoundingBox(imageDataUrl, addMaskBbox, {
+    const maskDataUrl = await createMaskFromBoundingBox(imageDataUrl, bbox, {
       category: addCategory,
       expandGlobalSurface: false,
+      featherPx: 0,
+      autoFeatherForAdd: false,
     });
     if (!maskDataUrl) {
       setApiError('Could not build the selection mask. Try again.');
@@ -2109,41 +2280,35 @@ export function GenerationResults({
             const id = Number(mytylesMatch[1]);
             const tile = editMytylesTiles.find((t) => t.id === id);
             if (tile?.imageUrl?.trim()) {
-              const conv = await ensureGenerateImageDataUrl(tile.imageUrl.trim());
-              if (typeof conv === 'string') referenceImageDataUrl = conv;
+              referenceImageUrl = tile.imageUrl.trim();
             }
           } else {
             const row = catalogStyleSwatchRows.find((r) => r.k === addSelectedStyleSwatch);
             if (row?.img?.trim()) {
-              const conv = await ensureGenerateImageDataUrl(row.img.trim());
-              if (typeof conv === 'string') referenceImageDataUrl = conv;
+              referenceImageUrl = row.img.trim();
             }
           }
         }
-        if (!referenceImageDataUrl && addSelectedMaterial?.trim() && addSelectedMaterialImageUrl?.trim()) {
-          const conv = await ensureGenerateImageDataUrl(addSelectedMaterialImageUrl.trim());
-          if (typeof conv === 'string') referenceImageDataUrl = conv;
+        if (!referenceImageUrl && addSelectedMaterial?.trim() && addSelectedMaterialImageUrl?.trim()) {
+          referenceImageUrl = addSelectedMaterialImageUrl.trim();
         }
       }
-      if (isCatalogProductStyleKey(addSelectedStyleSwatch) && !referenceImageDataUrl) {
+      if (isCatalogProductStyleKey(addSelectedStyleSwatch) && !referenceImageUrl) {
         setApiError('Could not load the selected catalog reference image. Please select another swatch and try again.');
         return;
       }
     }
-    if (
-      addObjectSubPanel === 'generatePrompt' &&
-      generatedPreviewUrl &&
-      generatedPreviewUrl.includes(',')
-    ) {
-      // Use generated preview as strict object anchor for final insertion.
-      referenceImageDataUrl = generatedPreviewUrl;
-      prompt = [
-        prompt,
-        'STRICT REFERENCE LOCK: Use the generated preview image as the exact object reference (same type, silhouette, and color family). Ignore its background completely and insert only the object into the room scene.',
-      ].join(' ');
+
+    let referenceImageDataUrl: string | undefined;
+    if (referenceImageUrl?.trim()) {
+      const conv = await ensureGenerateImageDataUrl(referenceImageUrl.trim());
+      if (typeof conv === 'string') {
+        referenceImageDataUrl = conv;
+      }
     }
 
     if (rawSource.trim()) setCompareBeforeOverride(rawSource.trim());
+    setShowSelectedAreaEffect(true);
     setApiGenerating(true);
     setApiGenerateKind('add');
     setApiError(null);
@@ -2185,6 +2350,7 @@ export function GenerationResults({
     } catch (e) {
       setApiError(e instanceof Error ? e.message : 'Add object failed.');
     } finally {
+      setShowSelectedAreaEffect(false);
       setApiGenerating(false);
       setApiGenerateKind(null);
     }
@@ -2294,7 +2460,8 @@ export function GenerationResults({
       panel.offsetHeight,
       imgEl.naturalWidth,
       imgEl.naturalHeight,
-      captureRect
+      captureRect,
+      { yAnchorRatio: isMobile ? MOBILE_IMAGE_Y_ANCHOR : 0.5 }
     );
     if (!bbox) {
       setApiError('Selection too small or invalid. Draw a larger area on the image.');
@@ -2431,6 +2598,25 @@ export function GenerationResults({
       return;
     }
     const elementType = mapEditCategoryToApiElement(replaceSelectedCategory || 'decor');
+    const isGlobalSurfaceReplace =
+      elementType === 'wall' || elementType === 'floor' || elementType === 'ceiling';
+    const replaceMaskRegion = isGlobalSurfaceReplace
+      ? bbox
+      : (() => {
+          // Replace should follow edit-like behavior: slightly grow object masks so
+          // the model can replace the full object instead of producing half-cut edits.
+          const grow = 0.35;
+          const x = Math.max(0, bbox.x - bbox.width * grow);
+          const y = Math.max(0, bbox.y - bbox.height * grow);
+          const r = Math.min(1, bbox.x + bbox.width * (1 + grow));
+          const b = Math.min(1, bbox.y + bbox.height * (1 + grow));
+          return {
+            x,
+            y,
+            width: Math.max(0.02, r - x),
+            height: Math.max(0.02, b - y),
+          };
+        })();
     const horizontal =
       bbox.x + bbox.width / 2 < 0.33 ? 'left' : bbox.x + bbox.width / 2 > 0.66 ? 'right' : 'center'
     const vertical =
@@ -2453,15 +2639,17 @@ export function GenerationResults({
     if (referenceImageUrl && isCatalogProductStyleKey(replaceSelectedStyleSwatch)) {
       descParts.push(EXACT_CATALOG_OBJECT_INSTRUCTION);
     }
+    const replaceDescription = descParts.join(' ');
     const entry: CustomizationLabelEntry = {
       label: label.length > 120 ? `${label.slice(0, 117)}…` : label,
-      description: descParts.join(' '),
+      description: replaceDescription,
       isDecor: false,
       action: 'replace',
       ...(referenceImageUrl ? { referenceImageUrl } : {}),
     };
 
     if (currentResultImage) setCompareBeforeOverride(currentResultImage);
+    setShowSelectedAreaEffect(true);
     setApiGenerating(true);
     setApiGenerateKind('replace');
     setApiError(null);
@@ -2506,6 +2694,7 @@ export function GenerationResults({
     } catch (e) {
       setApiError(e instanceof Error ? e.message : 'Replace failed.');
     } finally {
+      setShowSelectedAreaEffect(false);
       setApiGenerating(false);
       setApiGenerateKind(null);
     }
@@ -2558,7 +2747,8 @@ export function GenerationResults({
             panel.offsetHeight,
             imgEl.naturalWidth,
             imgEl.naturalHeight,
-            captureRect
+            captureRect,
+            { yAnchorRatio: isMobile ? MOBILE_IMAGE_Y_ANCHOR : 0.5 }
           )
         : null;
     if (!eraseRegion) {
@@ -2576,17 +2766,39 @@ export function GenerationResults({
       return;
     }
     if (rawSource.trim()) setCompareBeforeOverride(rawSource.trim());
+    setShowSelectedAreaEffect(true);
     setApiGenerating(true);
     setApiGenerateKind('erase');
     setApiError(null);
     setApiWarning(null);
     try {
-      const data = await postRoomErase({
-        configType: roomSession.configType,
-        sourceImageDataUrl: dataUrlResult,
-        eraseRegion,
-        eraseMode: useFullComponentsErase ? 'full-components' : 'region',
-      });
+      const data = !useFullComponentsErase
+        ? await (async () => {
+            // Strict region erase: always use hard mask edit path (no loose fallback).
+            const eraseMaskDataUrl = await createMaskFromBoundingBox(dataUrlResult, eraseRegion, {
+              expandGlobalSurface: false,
+            });
+            if (!eraseMaskDataUrl) {
+              return { error: 'Could not build the selection mask. Try again.' };
+            }
+            const erasePrompt = [
+              'STRICT MASK ERASE: remove all visible objects/content inside the white mask and reconstruct only plausible room background.',
+              'Boundary lock: edits must remain 100% inside the mask; do not change any pixel outside the mask.',
+              'Do not add new furniture/decor/textures that are not natural continuation of surrounding wall/floor/rug.',
+              'Keep perspective, lighting, and texture continuity at mask edges with a seamless blend.',
+            ].join(' ');
+            return postRoomReplace({
+              imageDataUrl: dataUrlResult,
+              maskDataUrl: eraseMaskDataUrl,
+              prompt: erasePrompt,
+            });
+          })()
+        : await postRoomErase({
+            configType: roomSession.configType,
+            sourceImageDataUrl: dataUrlResult,
+            eraseRegion,
+            eraseMode: 'full-components',
+          });
       if (data.error) {
         setApiError(data.error);
         return;
@@ -2610,6 +2822,7 @@ export function GenerationResults({
     } catch (e) {
       setApiError(e instanceof Error ? e.message : 'Erase failed.');
     } finally {
+      setShowSelectedAreaEffect(false);
       setApiGenerating(false);
       setApiGenerateKind(null);
     }
@@ -2636,10 +2849,18 @@ export function GenerationResults({
   // ── Place component handler (Add / Replace → room editor APIs; other demos → UI animation) ──
   const handlePlaceComponent = useCallback(() => {
     if (customActiveTab === 'Add Object') {
+      if (isMobile) {
+        setMobileRightPanelOpen(false);
+      }
       void handleAddObjectApply();
       return;
     }
     if (customActiveTab === 'Replace') {
+      if (isMobile) {
+        // Mobile UX: close both panels immediately after tapping Replace.
+        setMobileRightPanelOpen(false);
+        setMobileHistoryOpen(false);
+      }
       void handleReplaceApply();
       return;
     }
@@ -2660,14 +2881,18 @@ export function GenerationResults({
         setCaptureDragOrigin(null);
       }, 400);
     }, 3000);
-  }, [placingComponent, customActiveTab, handleAddObjectApply, handleReplaceApply]);
+  }, [placingComponent, customActiveTab, handleAddObjectApply, handleReplaceApply, isMobile]);
 
   // ── Capture area helpers ──
-  const getRelPos = (e: React.MouseEvent) => {
+  const getRelPosFromClient = (clientX: number, clientY: number) => {
     const panel = imagePanelRef.current;
     if (!panel) return { x: 0, y: 0 };
     const r = panel.getBoundingClientRect();
-    return { x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 };
+    return { x: ((clientX - r.left) / r.width) * 100, y: ((clientY - r.top) / r.height) * 100 };
+  };
+
+  const getRelPos = (e: React.MouseEvent) => {
+    return getRelPosFromClient(e.clientX, e.clientY);
   };
 
   const handleCaptureMouseDown = (e: React.MouseEvent) => {
@@ -2748,6 +2973,11 @@ export function GenerationResults({
   const handleCaptureMouseUp = () => {
     if (captureDrawing && captureRect && captureRect.w > 1 && captureRect.h > 1) {
       setCaptureLocked(true);
+      if (isMobile && (customActiveTab === 'Add Object' || customActiveTab === 'Replace')) {
+        // After area capture, bring back the original left panel flow (category/action panel).
+        setMobileRightPanelOpen(false);
+        setMobileHistoryOpen(true);
+      }
       // Cropped thumbnail for left rail — draw from the on-screen img to avoid CORS/taint on a second Image load.
       const panel = imagePanelRef.current;
       const imgEl = afterImageRef.current;
@@ -2762,7 +2992,8 @@ export function GenerationResults({
           panelH,
           imgEl.naturalWidth,
           imgEl.naturalHeight,
-          captureRect
+          captureRect,
+          { yAnchorRatio: isMobile ? MOBILE_IMAGE_Y_ANCHOR : 0.5 }
         );
         if (bbox) {
           const sx = bbox.x * imgEl.naturalWidth;
@@ -2792,6 +3023,82 @@ export function GenerationResults({
     setCaptureDragOrigin(null);
   };
 
+  const handleCaptureTouchStart = (e: React.TouchEvent) => {
+    if (!captureMode) return;
+    const t = e.touches[0];
+    if (!t) return;
+    e.preventDefault();
+    const pos = getRelPosFromClient(t.clientX, t.clientY);
+
+    if (captureLocked && captureRect) {
+      const HANDLE = 1.5;
+      const r = captureRect;
+      const corners: Array<{ key: 'nw' | 'ne' | 'sw' | 'se'; cx: number; cy: number }> = [
+        { key: 'nw', cx: r.x, cy: r.y },
+        { key: 'ne', cx: r.x + r.w, cy: r.y },
+        { key: 'sw', cx: r.x, cy: r.y + r.h },
+        { key: 'se', cx: r.x + r.w, cy: r.y + r.h },
+      ];
+      for (const c of corners) {
+        if (Math.abs(pos.x - c.cx) < HANDLE && Math.abs(pos.y - c.cy) < HANDLE) {
+          setCaptureDragMode(c.key);
+          setCaptureDragOrigin({ mx: pos.x, my: pos.y, rect: { ...r } });
+          return;
+        }
+      }
+      if (pos.x >= r.x && pos.x <= r.x + r.w && pos.y >= r.y && pos.y <= r.y + r.h) {
+        setCaptureDragMode('move');
+        setCaptureDragOrigin({ mx: pos.x, my: pos.y, rect: { ...r } });
+        return;
+      }
+      setCaptureRect(null);
+      setCaptureLocked(false);
+      setCaptureThumb(null);
+      setCapturePixelDims(null);
+      return;
+    }
+
+    setCaptureDrawing(true);
+    setCaptureStart(pos);
+    setCaptureRect(null);
+    setCaptureLocked(false);
+  };
+
+  const handleCaptureTouchMove = (e: React.TouchEvent) => {
+    if (!captureMode) return;
+    const t = e.touches[0];
+    if (!t) return;
+    e.preventDefault();
+    const pos = getRelPosFromClient(t.clientX, t.clientY);
+
+    if (captureDrawing && captureStart) {
+      const x = Math.min(captureStart.x, pos.x);
+      const y = Math.min(captureStart.y, pos.y);
+      const w = Math.abs(pos.x - captureStart.x);
+      const h = Math.abs(pos.y - captureStart.y);
+      setCaptureRect({ x, y, w, h });
+      return;
+    }
+
+    if (captureDragMode !== 'none' && captureDragOrigin && captureRect) {
+      const dx = pos.x - captureDragOrigin.mx;
+      const dy = pos.y - captureDragOrigin.my;
+      const o = captureDragOrigin.rect;
+      if (captureDragMode === 'move') {
+        setCaptureRect({ x: Math.max(0, Math.min(100 - o.w, o.x + dx)), y: Math.max(0, Math.min(100 - o.h, o.y + dy)), w: o.w, h: o.h });
+      } else {
+        let nx = o.x, ny = o.y, nw = o.w, nh = o.h;
+        if (captureDragMode === 'nw') { nx = o.x + dx; ny = o.y + dy; nw = o.w - dx; nh = o.h - dy; }
+        if (captureDragMode === 'ne') { ny = o.y + dy; nw = o.w + dx; nh = o.h - dy; }
+        if (captureDragMode === 'sw') { nx = o.x + dx; nw = o.w - dx; nh = o.h + dy; }
+        if (captureDragMode === 'se') { nw = o.w + dx; nh = o.h + dy; }
+        if (nw < 2) nw = 2;
+        if (nh < 2) nh = 2;
+        setCaptureRect({ x: Math.max(0, nx), y: Math.max(0, ny), w: Math.min(100 - Math.max(0, nx), nw), h: Math.min(100 - Math.max(0, ny), nh) });
+      }
+    }
+  };
+
   return (
     <>
     <div
@@ -2800,11 +3107,132 @@ export function GenerationResults({
         flexDirection:  'row',
         width:          '100%',
         height:         '100%',
-        gap:            '12px',
+        gap:            isMobile ? '0px' : '12px',
         fontFamily:     "'Inter', sans-serif",
         overflow:       isCustomisation ? 'visible' : 'hidden',
+        position:       'relative',
       }}
     >
+      {isMobile && (mobileHistoryOpen || mobileRightPanelOpen) && (
+        <button
+          type="button"
+          aria-label="Close side panels"
+          onClick={() => {
+            setMobileHistoryOpen(false);
+            setMobileRightPanelOpen(false);
+          }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 54,
+            background: 'rgba(0,0,0,0.18)',
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        />
+      )}
+
+      {isMobile && !isMobileDirectCaptureFlow && (
+        <button
+          type="button"
+          aria-label={mobileHistoryOpen ? 'Hide left panel' : 'Show left panel'}
+          onClick={() => {
+            setMobileHistoryOpen((v) => !v);
+            if (!mobileHistoryOpen) setMobileRightPanelOpen(false);
+          }}
+          style={{
+            position: 'absolute',
+            left: '6px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 57,
+            width: '26px',
+            height: '76px',
+            borderRadius: '12px',
+            border: `1px solid ${mobileHistoryOpen ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.20)'}`,
+            background: mobileHistoryOpen ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.58)',
+            color: 'rgba(255,255,255,0.92)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.35)',
+          }}
+          title={mobileHistoryOpen ? 'Hide left panel' : 'Show left panel'}
+        >
+          <span
+            style={{
+              writingMode: 'vertical-rl',
+              transform: 'rotate(180deg)',
+              fontSize: '10px',
+              fontWeight: 600,
+              letterSpacing: '0.05em',
+              fontFamily: "'Inter', sans-serif",
+              userSelect: 'none',
+            }}
+          >
+            {mobileHistoryOpen ? 'HIDE' : 'OPEN'}
+          </span>
+        </button>
+      )}
+
+      {isMobile && (
+        <button
+          type="button"
+          aria-label={mobileRightPanelOpen ? 'Hide tools panel' : 'Show tools panel'}
+          onClick={() => {
+            setMobileRightPanelOpen((v) => !v);
+            if (!mobileRightPanelOpen) setMobileHistoryOpen(false);
+          }}
+          style={{
+            position: 'absolute',
+            right: '0px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 57,
+            width: '28px',
+            height: '76px',
+            borderRadius: '12px 0 0 12px',
+            border: `1px solid ${mobileRightPanelOpen ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.20)'}`,
+            background: mobileRightPanelOpen ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.58)',
+            color: 'rgba(255,255,255,0.92)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.35)',
+          }}
+          title={mobileRightPanelOpen ? 'Hide tools panel' : 'Show tools panel'}
+        >
+          <span
+            style={{
+              display: 'flex',
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              userSelect: 'none',
+            }}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ opacity: 0.95, flexShrink: 0 }}
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="m12 8-4 4 4 4" />
+              <path d="M16 12H8" />
+            </svg>
+          </span>
+        </button>
+      )}
+
       {/* ── LEFT: History Panel ──────────────────────────────────────────── */}
       <div
         style={{
@@ -2822,6 +3250,11 @@ export function GenerationResults({
           backdropFilter:       'blur(12px)',
           WebkitBackdropFilter: 'blur(12px)',
           transition:           'width 280ms ease, border 280ms ease, box-shadow 280ms ease',
+          position:             isMobile ? 'absolute' : 'relative',
+          left:                 isMobile ? '0px' : undefined,
+          top:                  isMobile ? '0px' : undefined,
+          bottom:               isMobile ? '0px' : undefined,
+          zIndex:               isMobile ? 55 : undefined,
         }}
       >
         {showEditSwitchers ? (
@@ -2954,7 +3387,18 @@ export function GenerationResults({
                   return (
                     <div
                       key={cat}
-                      onClick={() => { const nextCat = normalizeCategoryKey(cat); setSelectedCategory(isSel ? null : nextCat); if (!isSel) setCustomPanelTab('Colour'); }}
+                      onClick={() => {
+                        const nextCat = normalizeCategoryKey(cat);
+                        setSelectedCategory(isSel ? null : nextCat);
+                        if (!isSel) {
+                          setCustomPanelTab('Colour');
+                          if (isMobile) {
+                            // Mobile Edit flow: selecting a category opens related data on right panel.
+                            setMobileHistoryOpen(false);
+                            setMobileRightPanelOpen(true);
+                          }
+                        }
+                      }}
                       style={{ height: '56px', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '13px', fontFamily: "'Inter', sans-serif", color: isSel ? '#ffffff' : 'rgba(255,255,255,0.75)', background: isSel ? 'rgba(255,255,255,0.08)' : 'transparent', borderBottom: '0.5px solid rgba(255,255,255,0.06)', cursor: 'pointer', position: 'relative', transition: 'background 150ms ease, color 150ms ease', flexShrink: 0 }}
                       onMouseEnter={e => { if (!isSel) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.05)'; }}
                       onMouseLeave={e => { if (!isSel) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
@@ -2970,20 +3414,22 @@ export function GenerationResults({
               </div>
             ) : customActiveTab === 'Add Object' ? (
               <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                <div
-                  onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
-                  onMouseEnter={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
-                  onMouseLeave={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
-                  style={{ margin: '16px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'capture' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'capture' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
-                >
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
+                {!isMobile && (
+                  <div
+                    onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
+                    onMouseEnter={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
+                    onMouseLeave={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
+                    style={{ margin: '16px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'capture' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'capture' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
+                  >
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Capture Area</div>
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Step 1: draw a box on the image where the new object should appear.</div>
+                    </div>
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Capture Area</div>
-                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Step 1: draw a box on the image where the new object should appear.</div>
-                  </div>
-                </div>
+                )}
                 {captureLocked && captureThumb && (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 16px', marginTop: 8 }}>
                     <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', width: '100%', textAlign: 'left', padding: '0 0 6px 0' }}>Selected Area</div>
@@ -3008,7 +3454,18 @@ export function GenerationResults({
                   return (
                     <div
                       key={cat}
-                      onClick={() => { const nextCat = normalizeCategoryKey(cat); setAddSelectedCategory(isSel ? null : nextCat); if (!isSel) setAddPanelTab('Style'); }}
+                      onClick={() => {
+                        const nextCat = normalizeCategoryKey(cat);
+                        setAddSelectedCategory(isSel ? null : nextCat);
+                        if (!isSel) {
+                          setAddPanelTab('Style');
+                          if (isMobile) {
+                            // Mobile Add flow: selecting a category should immediately open the right data panel.
+                            setMobileHistoryOpen(false);
+                            setMobileRightPanelOpen(true);
+                          }
+                        }
+                      }}
                       style={{ height: '56px', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '13px', fontFamily: "'Inter', sans-serif", color: isSel ? '#ffffff' : 'rgba(255,255,255,0.75)', background: isSel ? 'rgba(255,255,255,0.08)' : 'transparent', borderBottom: '0.5px solid rgba(255,255,255,0.06)', cursor: 'pointer', position: 'relative', transition: 'background 150ms ease, color 150ms ease', flexShrink: 0 }}
                       onMouseEnter={e => { if (!isSel) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.05)'; }}
                       onMouseLeave={e => { if (!isSel) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
@@ -3024,20 +3481,22 @@ export function GenerationResults({
               </div>
             ) : customActiveTab === 'Replace' ? (
               <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                <div
-                  onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
-                  onMouseEnter={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
-                  onMouseLeave={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
-                  style={{ margin: '16px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'capture' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'capture' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
-                >
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
+                {!isMobile && (
+                  <div
+                    onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
+                    onMouseEnter={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
+                    onMouseLeave={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
+                    style={{ margin: '16px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'capture' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'capture' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
+                  >
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Capture Area</div>
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Step 1: draw a box on the image around what you want to replace.</div>
+                    </div>
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Capture Area</div>
-                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Step 1: draw a box on the image around what you want to replace.</div>
-                  </div>
-                </div>
+                )}
                 {captureLocked && captureThumb && (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 16px', marginTop: 8 }}>
                     <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', width: '100%', textAlign: 'left', padding: '0 0 6px 0' }}>Selected Area</div>
@@ -3062,7 +3521,18 @@ export function GenerationResults({
                   return (
                     <div
                       key={cat}
-                      onClick={() => { const nextCat = normalizeCategoryKey(cat); setReplaceSelectedCategory(isSel ? null : nextCat); if (!isSel) setReplacePanelTab('Style'); }}
+                      onClick={() => {
+                        const nextCat = normalizeCategoryKey(cat);
+                        setReplaceSelectedCategory(isSel ? null : nextCat);
+                        if (!isSel) {
+                          setReplacePanelTab('Style');
+                          if (isMobile) {
+                            // Mobile Replace flow: selecting a category should immediately open the right data panel.
+                            setMobileHistoryOpen(false);
+                            setMobileRightPanelOpen(true);
+                          }
+                        }
+                      }}
                       style={{ height: '56px', display: 'flex', alignItems: 'center', padding: '0 16px', fontSize: '13px', fontFamily: "'Inter', sans-serif", color: isSel ? '#ffffff' : 'rgba(255,255,255,0.75)', background: isSel ? 'rgba(255,255,255,0.08)' : 'transparent', borderBottom: '0.5px solid rgba(255,255,255,0.06)', cursor: 'pointer', position: 'relative', transition: 'background 150ms ease, color 150ms ease', flexShrink: 0 }}
                       onMouseEnter={e => { if (!isSel) (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.05)'; }}
                       onMouseLeave={e => { if (!isSel) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
@@ -3113,47 +3583,6 @@ export function GenerationResults({
               </div>
             ) : (
               <div style={{ flex: 1 }} />
-            )}
-            {/* Confirm Customisation button for Erase tab */}
-            {customActiveTab === 'Erase' &&
-              (captureLocked || (isCustomComponentConfiguration && selectedAction === 'erase-full-components')) &&
-              eraseLeftTab === 'Objects' && (
-              <div style={{ padding: '16px', borderTop: '0.5px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-                <button
-                  type="button"
-                  disabled={!canApplyErase}
-                  onClick={() => void handleEraseApply()}
-                  style={{
-                    width: '100%',
-                    height: '44px',
-                    background: '#000000',
-                    border: '1px solid #ffffff',
-                    borderRadius: '8px',
-                    color: '#ffffff',
-                    fontSize: '13px',
-                    fontWeight: 500,
-                    fontFamily: "'Inter', sans-serif",
-                    letterSpacing: '-0.1px',
-                    cursor: !canApplyErase ? 'not-allowed' : 'pointer',
-                    boxShadow: '0px 2px 12px 0px rgba(0,0,0,0.22)',
-                    transition: 'background 150ms ease',
-                    opacity: !canApplyErase ? 0.55 : 1,
-                  }}
-                  onMouseEnter={e => {
-                    if (!canApplyErase) return;
-                    (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.08)';
-                  }}
-                  onMouseLeave={e => {
-                    (e.currentTarget as HTMLButtonElement).style.background = '#000000';
-                  }}
-                >
-                  {apiGenerating && apiGenerateKind === 'erase'
-                    ? 'Erasing…'
-                    : selectedAction === 'erase-full-components'
-                      ? 'Apply full component erase'
-                      : 'Apply erase'}
-                </button>
-              </div>
             )}
           </>
         ) : historyRailCollapsed ? (
@@ -3294,41 +3723,46 @@ export function GenerationResults({
         {/* Toolbar */}
         <div
           style={{
-            height:        '39px',
+            height:        isMobile ? '46px' : '39px',
             flexShrink:    0,
             background:    'rgba(0,0,0,0.22)',
             borderBottom:  '1px solid rgba(255,255,255,0.15)',
             display:       'flex',
             alignItems:    'center',
-            paddingLeft:   '1px',
+            paddingLeft:   isMobile ? '8px' : '1px',
+            paddingRight:  isMobile ? '8px' : undefined,
             position:      'relative',
+            overflowX:     isMobile ? 'auto' : 'visible',
+            overflowY:     'hidden',
+            scrollbarWidth:'none',
           }}
         >
-          {/* Share */}
-          <ToolbarButton
-            icon={<IconShare />}
-            label="Share"
-            onClick={handleShareCurrentResult}
-            disabled={!afterImage}
-          />
-          <ToolbarDivider />
-          {/* Like */}
-          <ToolbarButton
-            icon={<IconLike active={liked} />}
-            label={liked ? "Liked" : "Like"}
-            onClick={handleToggleLike}
-            disabled={!afterImage}
-            active={liked}
-          />
-          <ToolbarDivider />
-          {/* Download */}
-          <ToolbarButton
-            icon={<IconDownload />}
-            label="Download"
-            onClick={handleDownloadCurrentResult}
-            disabled={!afterImage}
-          />
-          <ToolbarDivider />
+          {!isMobile && (
+            <>
+              <ToolbarButton
+                icon={<IconShare />}
+                label="Share"
+                onClick={handleShareCurrentResult}
+                disabled={!afterImage}
+              />
+              <ToolbarDivider />
+              <ToolbarButton
+                icon={<IconLike active={liked} />}
+                label={liked ? "Liked" : "Like"}
+                onClick={handleToggleLike}
+                disabled={!afterImage}
+                active={liked}
+              />
+              <ToolbarDivider />
+              <ToolbarButton
+                icon={<IconDownload />}
+                label="Download"
+                onClick={handleDownloadCurrentResult}
+                disabled={!afterImage}
+              />
+              <ToolbarDivider />
+            </>
+          )}
           <ToolbarButton
             icon={<span style={{ color: '#ffffff', display: 'inline-flex' }}><CustomTabIconUndo /></span>}
             label="Undo"
@@ -3336,7 +3770,7 @@ export function GenerationResults({
             disabled={!canUndo}
             iconOnly
           />
-          <ToolbarDivider />
+          {!isMobile && <ToolbarDivider />}
           <ToolbarButton
             icon={<span style={{ color: '#ffffff', display: 'inline-flex' }}><CustomTabIconRedo /></span>}
             label="Redo"
@@ -3344,7 +3778,7 @@ export function GenerationResults({
             disabled={!canRedo}
             iconOnly
           />
-          <ToolbarDivider />
+          {!isMobile && <ToolbarDivider />}
           <ToolbarButton
             icon={<span style={{ color: '#ffffff', display: 'inline-flex' }}><CustomTabIconRestart /></span>}
             label="Restart"
@@ -3352,17 +3786,49 @@ export function GenerationResults({
             disabled={!afterImage}
             iconOnly
           />
-          <ToolbarDivider />
+          {!isMobile && <ToolbarDivider />}
           <ToolbarButton
             icon={<IconWatermark />}
             label={showWatermark ? 'Remove watermark' : 'Show watermark'}
             onClick={() => setShowWatermark((v) => !v)}
             disabled={!generatedImageUrl?.trim() || !generatedImageRawUrl?.trim()}
             active={!showWatermark}
+            iconOnly={isMobile}
           />
-          {!showEditSwitchers && (
+
+          <div style={{ marginLeft: 'auto', display: isMobile ? 'flex' : 'none', alignItems: 'center' }}>
+            {!isMobile && <ToolbarDivider />}
+            {/* Share */}
+            <ToolbarButton
+              icon={<IconShare />}
+              label="Share"
+              onClick={handleShareCurrentResult}
+              disabled={!afterImage}
+              iconOnly={isMobile}
+            />
+            {!isMobile && <ToolbarDivider />}
+            {/* Like */}
+            <ToolbarButton
+              icon={<IconLike active={liked} />}
+              label={liked ? "Liked" : "Like"}
+              onClick={handleToggleLike}
+              disabled={!afterImage}
+              active={liked}
+              iconOnly={isMobile}
+            />
+            {!isMobile && <ToolbarDivider />}
+            {/* Download */}
+            <ToolbarButton
+              icon={<IconDownload />}
+              label="Download"
+              onClick={handleDownloadCurrentResult}
+              disabled={!afterImage}
+              iconOnly={isMobile}
+            />
+          </div>
+          {!showEditSwitchers && !isMobile && (
             <>
-              <ToolbarDivider />
+          {!isMobile && <ToolbarDivider />}
               <ToolbarButton
                 icon={<IconHistoryMenu />}
                 label="History"
@@ -3376,13 +3842,18 @@ export function GenerationResults({
           {/* Style badge + color dots */}
           <div
             style={{
-              position:     'absolute',
+              display:      isMobile ? 'none' : 'flex',
+              position:     isMobile ? 'static' : 'absolute',
               right:        '10px',
               top:          '50%',
-              transform:    'translateY(-50%)',
-              display:      'flex',
+              transform:    isMobile ? 'none' : 'translateY(-50%)',
               alignItems:   'center',
               gap:          '8px',
+              marginLeft:   'auto',
+              paddingRight: isMobile ? '8px' : undefined,
+              flexShrink:   0,
+              pointerEvents:'auto',
+              opacity:      1,
             }}
           >
             <div
@@ -3420,6 +3891,120 @@ export function GenerationResults({
           </div>
         </div>
 
+        {isCustomisation && isMobile && (
+          <div
+            style={{
+              flexShrink: 0,
+              padding: isMobile ? '8px 8px 10px' : '8px 12px 10px',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              background: 'rgba(0,0,0,0.2)',
+              display: 'flex',
+              justifyContent: 'center',
+            }}
+          >
+            <CustomisationTabBar
+              activeTab={customActiveTab}
+              onTabChange={onCustomTabChange}
+            />
+          </div>
+        )}
+
+        {isMobile && (
+          <div
+            style={{
+              minHeight: '42px',
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 8px',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              background: 'rgba(0,0,0,0.24)',
+            }}
+          >
+            {!isMobileDirectCaptureFlow ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileHistoryOpen((v) => !v);
+                  if (!mobileHistoryOpen) setMobileRightPanelOpen(false);
+                }}
+                style={{
+                  height: '30px',
+                  padding: '0 10px',
+                  borderRadius: '9px',
+                  border: `1px solid ${mobileHistoryOpen ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.2)'}`,
+                  background: mobileHistoryOpen ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.55)',
+                  color: '#ffffff',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  fontFamily: "'Inter', sans-serif",
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                History
+              </button>
+            ) : (
+              <div
+                style={{
+                  height: '30px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '0 10px',
+                  borderRadius: '9px',
+                  border: '1px solid rgba(255,255,255,0.22)',
+                  background: 'rgba(0,0,0,0.55)',
+                  color: 'rgba(255,255,255,0.9)',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  fontFamily: "'Inter', sans-serif",
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >
+                Capture Area Mode
+              </div>
+            )}
+            <div
+              style={{
+                background:   'rgba(0,0,0,0.55)',
+                border:       '1px solid rgba(255,255,255,0.15)',
+                borderRadius: '8px',
+                padding:      '3px 8px',
+                fontSize:     '10px',
+                fontWeight:   400,
+                color:        'rgba(255,255,255,0.95)',
+                fontFamily:   "'Inter', sans-serif",
+                whiteSpace:   'nowrap',
+                maxWidth:     '38%',
+                overflow:     'hidden',
+                textOverflow: 'ellipsis',
+                flexShrink:   1,
+              }}
+              title={selectedStyle}
+            >
+              {selectedStyle}
+            </div>
+            {selectedColorDots && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto', flexShrink: 0 }}>
+                {selectedColorDots.slice(0, 6).map((color, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width:        '7px',
+                      height:       '7px',
+                      borderRadius: '50%',
+                      background:   color,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Generated Image */}
         <div
           ref={imagePanelRef}
@@ -3427,6 +4012,10 @@ export function GenerationResults({
           onMouseMove={handleCaptureMouseMove}
           onMouseUp={handleCaptureMouseUp}
           onMouseLeave={handleCaptureMouseUp}
+          onTouchStart={handleCaptureTouchStart}
+          onTouchMove={handleCaptureTouchMove}
+          onTouchEnd={handleCaptureMouseUp}
+          onTouchCancel={handleCaptureMouseUp}
           style={{
             flex: 1,
             minHeight: 0,
@@ -3437,6 +4026,7 @@ export function GenerationResults({
             borderBottomRightRadius: 12,
             userSelect: captureMode ? 'none' : undefined,
             background: '#0d0d0d',
+            touchAction: captureMode ? 'none' : 'auto',
           }}
         >
           {/* AFTER image (full, always visible as base layer) — contain preserves upload aspect ratio (no crop). */}
@@ -3444,15 +4034,15 @@ export function GenerationResults({
             ref={afterImageRef}
             src={afterImage}
             alt="Generated Room"
+            onLoad={measureRenderedImageOffset}
             style={{
               width:          '100%',
               height:         '100%',
               objectFit:      'contain',
-              objectPosition: 'center center',
+              objectPosition: isMobile ? `center ${MOBILE_IMAGE_Y_ANCHOR * 100}%` : 'center center',
               display:        'block',
             }}
           />
-
           {/* BEFORE image (clipped to left of divider) — only when compare is active */}
           {showCompare && (
             <div
@@ -3469,7 +4059,7 @@ export function GenerationResults({
                   width:          '100%',
                   height:         '100%',
                   objectFit:      'contain',
-                  objectPosition: 'center center',
+                  objectPosition: isMobile ? `center ${MOBILE_IMAGE_Y_ANCHOR * 100}%` : 'center center',
                   display:        'block',
                 }}
               />
@@ -3502,8 +4092,8 @@ export function GenerationResults({
                   top: '50%',
                   left: `${dividerPos}%`,
                   transform: 'translate(-50%, -50%)',
-                  width: '32px',
-                  height: '32px',
+                  width: isMobile ? '44px' : '32px',
+                  height: isMobile ? '44px' : '32px',
                   borderRadius: '50%',
                   background: 'rgba(20,20,20,0.85)',
                   border: '1.5px solid #ffffff',
@@ -3513,6 +4103,7 @@ export function GenerationResults({
                   cursor: 'ew-resize',
                   zIndex: 3,
                   userSelect: 'none',
+                  touchAction: 'none',
                 }}
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -3528,8 +4119,8 @@ export function GenerationResults({
             <div
               style={{
                 position: 'absolute',
-                top: '8px',
-                left: '8px',
+                top: `${renderedImageOffset.y + 8}px`,
+                left: `${renderedImageOffset.x + 8}px`,
                 background: 'rgba(0,0,0,0.7)',
                 color: '#ffffff',
                 fontSize: '10px',
@@ -3551,8 +4142,8 @@ export function GenerationResults({
             <div
               style={{
                 position: 'absolute',
-                top: '8px',
-                right: '8px',
+                top: `${renderedImageOffset.y + 8}px`,
+                right: `${renderedImageOffset.x + 8}px`,
                 background: 'rgba(0,0,0,0.7)',
                 color: '#ffffff',
                 fontSize: '10px',
@@ -3569,14 +4160,15 @@ export function GenerationResults({
             </div>
           )}
 
-          {showScanCanvas && (
+          {showScanCanvas && !captureMode && (
             <canvas
               ref={canvasRef}
               style={{
                 position: 'absolute',
-                inset: 0,
-                width: '100%',
-                height: '100%',
+                left: `${renderedImageOffset.x}px`,
+                top: `${renderedImageOffset.y}px`,
+                width: `${Math.max(0, renderedImageSize.w)}px`,
+                height: `${Math.max(0, renderedImageSize.h)}px`,
                 pointerEvents: 'none',
                 zIndex: 90,
               }}
@@ -3586,12 +4178,29 @@ export function GenerationResults({
           {/* Capture area overlay */}
           {captureMode && (
             <>
+              <style>{`
+                @keyframes captureWetDriftA {
+                  0% { transform: translate3d(0, 0, 0) scale(1.03); }
+                  50% { transform: translate3d(-6%, 4%, 0) scale(1.09); }
+                  100% { transform: translate3d(5%, -4%, 0) scale(1.06); }
+                }
+                @keyframes captureWetDriftB {
+                  0% { transform: translate3d(0, 0, 0) scale(1.05); }
+                  50% { transform: translate3d(4%, -6%, 0) scale(1.12); }
+                  100% { transform: translate3d(-4%, 4%, 0) scale(1.08); }
+                }
+                @keyframes captureShimmerSweep {
+                  0% { transform: translateX(-135%); opacity: 0.18; }
+                  50% { opacity: 0.42; }
+                  100% { transform: translateX(135%); opacity: 0.18; }
+                }
+              `}</style>
               {/* Dark overlay with cutout via clip-path */}
               <div
                 style={{
                   position: 'absolute',
                   inset: 0,
-                  background: 'rgba(0,0,0,0.35)',
+                  background: isMobileDirectCaptureFlow ? 'rgba(0,0,0,0.16)' : 'rgba(0,0,0,0.35)',
                   pointerEvents: 'none',
                   zIndex: 5,
                   ...(captureRect && captureRect.w > 0.5 && captureRect.h > 0.5 ? {
@@ -3599,6 +4208,41 @@ export function GenerationResults({
                   } : {}),
                 }}
               />
+              {isMobileDirectCaptureFlow && !captureLocked && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 14,
+                    left: 14,
+                    right: 14,
+                    zIndex: 9,
+                    pointerEvents: 'none',
+                    display: 'flex',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: 290,
+                      width: '100%',
+                      borderRadius: 12,
+                      border: '1px solid rgba(255,255,255,0.22)',
+                      background: 'rgba(0,0,0,0.62)',
+                      backdropFilter: 'blur(8px)',
+                      WebkitBackdropFilter: 'blur(8px)',
+                      boxShadow: '0 10px 24px rgba(0,0,0,0.35)',
+                      padding: '10px 12px',
+                      color: '#ffffff',
+                      fontFamily: "'Inter', sans-serif",
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>Capture Area</div>
+                    <div style={{ fontSize: 11, marginTop: 3, color: 'rgba(255,255,255,0.78)', lineHeight: 1.35 }}>
+                      Draw a box directly on the image to select the region.
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* Selection rectangle border */}
               {captureRect && captureRect.w > 0.5 && captureRect.h > 0.5 && (
                 <div
@@ -3612,8 +4256,61 @@ export function GenerationResults({
                     pointerEvents: 'none',
                     zIndex: 6,
                     boxSizing: 'border-box',
+                    overflow: 'hidden',
+                    background: captureLocked ? 'rgba(150, 168, 184, 0.20)' : 'transparent',
                   }}
-                />
+                >
+                  {captureLocked && showSelectedAreaEffect && (
+                    <>
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          // Frosted base that bends the image beneath (rain-on-glass look).
+                          backdropFilter: 'blur(5px) contrast(1.15) saturate(0.82)',
+                          WebkitBackdropFilter: 'blur(5px) contrast(1.15) saturate(0.82)',
+                          background:
+                            'linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(210,220,230,0.12) 52%, rgba(120,130,145,0.2) 100%)',
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: '-12%',
+                          background:
+                            'radial-gradient(120px 90px at 20% 20%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.05) 55%, transparent 80%), radial-gradient(140px 110px at 72% 30%, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0.04) 58%, transparent 82%), radial-gradient(110px 80px at 45% 78%, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 60%, transparent 84%)',
+                          filter: 'blur(3.2px)',
+                          animation: 'captureWetDriftA 1.75s ease-in-out infinite alternate',
+                          opacity: 1,
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: '-14%',
+                          background:
+                            'repeating-linear-gradient(103deg, rgba(255,255,255,0.14) 0 2px, rgba(255,255,255,0.0) 2px 14px), repeating-linear-gradient(77deg, rgba(255,255,255,0.08) 0 1px, rgba(255,255,255,0.0) 1px 10px)',
+                          mixBlendMode: 'screen',
+                          filter: 'blur(2.2px)',
+                          animation: 'captureWetDriftB 2.05s ease-in-out infinite',
+                          opacity: 0.62,
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          bottom: 0,
+                          width: '46%',
+                          background:
+                            'linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.30) 48%, rgba(255,255,255,0) 100%)',
+                          filter: 'blur(1.6px)',
+                          animation: 'captureShimmerSweep 1.7s ease-in-out infinite',
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
               )}
               {/* Corner handles when locked */}
               {captureLocked && captureRect && (() => {
@@ -3641,52 +4338,58 @@ export function GenerationResults({
                   />
                 ));
               })()}
-              {/* "Area selected" pill */}
-              {captureLocked && captureRect && (
-                <div
+              {/* Contextual erase action attached to selected bbox */}
+              {customActiveTab === 'Erase' &&
+                eraseLeftTab === 'Objects' &&
+                (captureLocked || (isCustomComponentConfiguration && selectedAction === 'erase-full-components')) && (
+                <button
+                  type="button"
+                  disabled={!canApplyErase}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleEraseApply();
+                  }}
                   style={{
                     position: 'absolute',
-                    left: `${captureRect.x + captureRect.w}%`,
-                    top: `${captureRect.y}%`,
-                    transform: 'translate(-100%, -100%) translateY(-4px)',
-                    background: 'rgba(0,0,0,0.7)',
+                    left: captureRect ? `${captureRect.x + captureRect.w}%` : '50%',
+                    top: captureRect ? `${captureRect.y + captureRect.h}%` : '50%',
+                    transform: 'translate(-100%, 10px)',
+                    minWidth: '130px',
+                    height: '34px',
+                    padding: '0 12px',
+                    background: '#000000',
+                    border: '1px solid #ffffff',
+                    borderRadius: '8px',
                     color: '#ffffff',
-                    fontSize: 11,
-                    padding: '4px 8px',
-                    borderRadius: 4,
+                    fontSize: '12px',
+                    fontWeight: 500,
                     fontFamily: "'Inter', sans-serif",
-                    pointerEvents: 'none',
-                    zIndex: 7,
+                    letterSpacing: '-0.1px',
+                    cursor: !canApplyErase ? 'not-allowed' : 'pointer',
+                    boxShadow: '0px 2px 12px 0px rgba(0,0,0,0.30)',
+                    transition: 'background 150ms ease',
+                    opacity: !canApplyErase ? 0.55 : 1,
+                    zIndex: 8,
+                    pointerEvents: 'auto',
                     whiteSpace: 'nowrap',
                   }}
+                  onMouseEnter={e => {
+                    if (!canApplyErase) return;
+                    (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.08)';
+                  }}
+                  onMouseLeave={e => {
+                    (e.currentTarget as HTMLButtonElement).style.background = '#000000';
+                  }}
                 >
-                  Area selected
-                </div>
+                  {apiGenerating && apiGenerateKind === 'erase'
+                    ? 'Erasing…'
+                    : selectedAction === 'erase-full-components'
+                      ? 'Apply full component erase'
+                      : 'Apply erase'}
+                </button>
               )}
-              {/* Cancel Selection button */}
-              <div
-                onClick={() => setSelectedAction(null)}
-                style={{
-                  position: 'absolute',
-                  top: 12,
-                  right: 12,
-                  background: 'rgba(180,0,0,0.75)',
-                  border: '0.5px solid rgba(255,80,80,0.4)',
-                  color: '#ffffff',
-                  fontSize: 11,
-                  padding: '5px 12px',
-                  borderRadius: 20,
-                  zIndex: 999,
-                  cursor: 'pointer',
-                  fontFamily: "'Inter', sans-serif",
-                  whiteSpace: 'nowrap',
-                  display: placingComponent ? 'none' : undefined,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(200,0,0,0.85)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'rgba(180,0,0,0.75)')}
-              >
-                Cancel Selection
-              </div>
             </>
           )}
 
@@ -3727,8 +4430,8 @@ export function GenerationResults({
               style={{
                 position: 'absolute',
                 right: 14,
-                bottom: 14,
-                zIndex: 48,
+                bottom: isMobile && isCustomisation ? 84 : 14,
+                zIndex: isMobile && isCustomisation ? 10001 : 48,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
@@ -3746,15 +4449,34 @@ export function GenerationResults({
                 boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
               }}
             >
-              <span style={{ fontSize: 14 }} aria-hidden>
-                🎥
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                aria-hidden
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5" />
+                  <rect x="2" y="6" width="14" height="12" rx="2" />
+                </svg>
               </span>
               360° Video
             </button>
           )}
         </div>
-        {/* ── Floating Customisation Tab Bar ──────────────────────────── */}
-        {isCustomisation && (
+        {!isMobile && isCustomisation && (
           <div style={{ position: 'absolute', bottom: '-36px', left: '50%', transform: 'translateX(-50%)', zIndex: 9999 }}>
             <CustomisationTabBar
               activeTab={customActiveTab}
@@ -3767,7 +4489,7 @@ export function GenerationResults({
       {/* ── RIGHT: Color / Style Panel ───────────────────────────────────── */}
       <div
         style={{
-          width:                showRightPanel ? '259px' : '0px',
+          width:                showRightPanel ? (isMobile ? '82vw' : '259px') : '0px',
           flexShrink:           0,
           height:               '100%',
           background:           'rgba(0,0,0,0.22)',
@@ -3779,11 +4501,37 @@ export function GenerationResults({
           overflow:             'hidden',
           backdropFilter:       showRightPanel ? 'blur(12px)' : 'none',
           WebkitBackdropFilter: showRightPanel ? 'blur(12px)' : 'none',
-          position:             'relative',
           opacity:              showRightPanel ? 1 : 0,
           transition:           'width 300ms ease, opacity 300ms ease, border 300ms ease, box-shadow 300ms ease',
+          zIndex:               isMobile ? 56 : undefined,
+          right:                isMobile ? '0px' : undefined,
+          top:                  isMobile ? '0px' : undefined,
+          bottom:               isMobile ? '74px' : undefined,
+          position:             isMobile ? 'absolute' : 'relative',
         }}
       >
+        {isMobile && showRightPanel && (
+          <button
+            type="button"
+            onClick={() => setMobileRightPanelOpen(false)}
+            aria-label="Close tools panel"
+            style={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              width: 28,
+              height: 28,
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.16)',
+              background: 'rgba(0,0,0,0.5)',
+              color: 'rgba(255,255,255,0.9)',
+              cursor: 'pointer',
+              zIndex: 70,
+            }}
+          >
+            ×
+          </button>
+        )}
         {isCustomisation && customActiveTab === 'Add Object' ? (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: "'Inter', sans-serif", position: 'relative' }}>
             {/* Uploaded Component panel */}
@@ -3885,20 +4633,6 @@ export function GenerationResults({
                   style={{ width: 'calc(100% - 32px)', margin: '0 16px', minHeight: 100, background: 'rgba(255,255,255,0.04)', border: '0.5px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 12, fontSize: 12, color: '#ffffff', resize: 'none', fontFamily: "'Inter', sans-serif", outline: 'none' }}
                 />
                 <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', margin: '4px 16px 0', textAlign: 'right' }}>{generatePromptText.length} / 300</div>
-                {/* Generate / Rewrite button — only shown above preview when no preview yet */}
-                {!generatedPreview && !generateScanning && (
-                  <div style={{ padding: '0 16px', marginTop: 12 }}>
-                    <button
-                      disabled={!generatePromptText.trim() || generating}
-                      onClick={handleGeneratePromptPreview}
-                      style={{ width: '100%', height: 40, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.3)', color: '#ffffff', fontSize: 13, fontWeight: 500, borderRadius: 8, cursor: (generatePromptText.trim() && !generating) ? 'pointer' : 'default', fontFamily: "'Inter', sans-serif", transition: 'background 150ms ease, opacity 150ms ease', opacity: (generatePromptText.trim() && !generating) ? 1 : 0.4 }}
-                      onMouseEnter={e => { if (generatePromptText.trim() && !generating) (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.18)'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.1)'; }}
-                    >
-                      {generating ? 'Generating...' : 'Generate Component'}
-                    </button>
-                  </div>
-                )}
                 {!generatedPreview && !generateScanning && generatePromptText.trim() && (
                   <div style={{ padding: '12px 16px 0' }}>
                     <button
@@ -4232,7 +4966,7 @@ export function GenerationResults({
                   <span>Text prompt</span>
                 </button>
               </div>
-              <div style={{ padding: '12px 16px 16px', flexShrink: 0 }}>
+              <div style={{ padding: isMobile ? '12px 16px 96px' : '12px 16px 16px', flexShrink: 0 }}>
                 {addSelectedCategory &&
                   !captureLocked &&
                   (Boolean(addSelectedStyleSwatch?.trim()) ||
@@ -4256,7 +4990,10 @@ export function GenerationResults({
                 <button
                   type="button"
                   disabled={addCatalogToImageDisabled}
-                  onClick={() => void handleAddObjectApply()}
+                  onClick={() => {
+                    if (isMobile) setMobileRightPanelOpen(false);
+                    void handleAddObjectApply();
+                  }}
                   style={{
                     width: '100%',
                     height: '44px',
@@ -4551,11 +5288,14 @@ export function GenerationResults({
                   <span>Text prompt</span>
                 </button>
               </div>
-              <div style={{ padding: '12px 16px 16px', flexShrink: 0 }}>
+              <div style={{ padding: isMobile ? '12px 16px 96px' : '12px 16px 16px', flexShrink: 0 }}>
                 <button
                   type="button"
                   disabled={replaceCatalogToImageDisabled}
-                  onClick={() => void handleReplaceApply()}
+                  onClick={() => {
+                    if (isMobile) setMobileRightPanelOpen(false);
+                    void handleReplaceApply();
+                  }}
                   style={{
                     width: '100%',
                     height: '44px',
@@ -4965,7 +5705,21 @@ export function GenerationResults({
               ) : null}
             </div>
             {/* Confirm Customisation button (Edit → catalog / style / colour / material) */}
-            <div style={{ padding: '12px 16px 16px', flexShrink: 0, position: 'sticky', bottom: 0, zIndex: 3 }}>
+            <div
+              style={{
+                padding: isMobile
+                  ? '10px 16px calc(12px + env(safe-area-inset-bottom, 0px))'
+                  : '12px 16px 16px',
+                flexShrink: 0,
+                position: 'sticky',
+                bottom: 0,
+                zIndex: 4,
+                background:
+                  'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 28%, rgba(0,0,0,0.78) 100%)',
+                backdropFilter: isMobile ? 'blur(6px)' : undefined,
+                WebkitBackdropFilter: isMobile ? 'blur(6px)' : undefined,
+              }}
+            >
               <button
                 type="button"
                 disabled={customActiveTab === 'Edit' ? editCustomizationConfirmDisabled : false}
@@ -5330,6 +6084,7 @@ export function GenerationResults({
           <button
             type="button"
             style={{
+              display:      isMobile ? 'none' : 'block',
               width:        '100%',
               height:       '44px',
               borderRadius: '10px',
@@ -5363,6 +6118,42 @@ export function GenerationResults({
         </>)}
       </div>
     </div>
+
+    {isMobile &&
+      !mobileFinalizeDismissed &&
+      !isCustomisation &&
+      !!generatedImageUrl?.trim() &&
+      !apiGenerating &&
+      !externalGeneratePending &&
+      !showEditSwitchers && (
+      <button
+        type="button"
+        style={{
+          position:     'absolute',
+          right:        '14px',
+          bottom:       '76px',
+          width:        '168px',
+          height:       '42px',
+          borderRadius: '10px',
+          background:   finalizeDisabled ? 'rgba(0,0,0,0.45)' : '#000000',
+          border:       '1.5px solid #FFFFFF',
+          cursor:       finalizeDisabled ? 'not-allowed' : 'pointer',
+          fontFamily:   "'Inter', sans-serif",
+          fontSize:     '13px',
+          fontWeight:   500,
+          color:        '#FFFFFF',
+          letterSpacing:'-0.1px',
+          transition:   'all 180ms ease',
+          boxShadow:    '0 4px 16px rgba(0,0,0,0.32)',
+          opacity:      finalizeDisabled ? 0.75 : 1,
+          zIndex:       35,
+        }}
+        disabled={finalizeDisabled}
+        onClick={() => void handleFinalizeClick()}
+      >
+        Finalize the Image
+      </button>
+    )}
 
     {tourModalOpen && (
       <div
@@ -5760,6 +6551,7 @@ export function CustomisationTabBar({
   activeTab?: string | null;
   onTabChange?: (tab: string | null) => void;
 } = {}) {
+  const [isMobileBar, setIsMobileBar] = useState(false);
   const [internalTab, setInternalTab] = useState<string | null>(null);
   const activeCustomTab = controlledTab !== undefined ? controlledTab : internalTab;
   const handleTabChange = (tab: string) => {
@@ -5769,9 +6561,32 @@ export function CustomisationTabBar({
     onTabChange?.(newTab);
   };
 
-  return (
-    <div
-      style={{
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobileBar(window.innerWidth < 768);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const barStyle: React.CSSProperties = isMobileBar
+    ? {
+        width: '100%',
+        maxWidth: '100%',
+        minHeight: '40px',
+        background: 'rgba(0, 0, 0, 0.5)',
+        borderRadius: '999px',
+        border: '1px solid rgba(255,255,255,0.14)',
+        boxShadow: 'inset 0 0.5px 0 rgba(255,255,255,0.08)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        overflowX: 'auto',
+        scrollbarWidth: 'none',
+        padding: '4px',
+        gap: '3px',
+      }
+    : {
         width: '245.19px',
         height: '72px',
         background: 'rgba(0, 0, 0, 0.35)',
@@ -5784,7 +6599,11 @@ export function CustomisationTabBar({
         alignItems: 'center',
         justifyContent: 'space-evenly',
         overflow: 'visible',
-      }}
+      };
+
+  return (
+    <div
+      style={barStyle}
     >
       {([
         { id: 'Edit', icon: <CustomTabIconEdit /> },
@@ -5799,14 +6618,24 @@ export function CustomisationTabBar({
             onClick={() => handleTabChange(tab.id)}
             style={{
               display: 'flex',
-              flexDirection: 'column',
+              flexDirection: isMobileBar ? 'row' : 'column',
               alignItems: 'center',
               cursor: 'pointer',
               position: 'relative',
-              paddingTop: '15px',
+              justifyContent: isMobileBar ? 'center' : undefined,
+              flex: isMobileBar ? 1 : 'unset',
+              minWidth: isMobileBar ? 0 : 'unset',
+              borderRadius: isMobileBar ? '999px' : undefined,
+              border: isMobileBar ? `1px solid ${isActive ? 'rgba(255,255,255,0.42)' : 'transparent'}` : undefined,
+              background: isMobileBar ? (isActive ? 'rgba(255,255,255,0.14)' : 'transparent') : undefined,
+              height: isMobileBar ? '32px' : undefined,
+              padding: isMobileBar ? '0 10px' : undefined,
+              paddingTop: isMobileBar ? undefined : '15px',
+              gap: isMobileBar ? '6px' : undefined,
+              transition: isMobileBar ? 'background 160ms ease, border-color 160ms ease' : undefined,
             }}
           >
-            {isActive && (
+            {!isMobileBar && isActive && (
               <div
                 style={{
                   position: 'absolute',
@@ -5820,19 +6649,19 @@ export function CustomisationTabBar({
                 }}
               />
             )}
-            <div style={{ width: '16px', height: '16px', color: isActive ? '#ffffff' : 'rgba(255,255,255,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', filter: isActive ? 'drop-shadow(0 0 2px rgba(255, 255, 255, 0.6)) drop-shadow(0 0 4px rgba(255, 255, 255, 0.25))' : 'none' }}>
+            <div style={{ width: isMobileBar ? '14px' : '16px', height: isMobileBar ? '14px' : '16px', color: isActive ? '#ffffff' : (isMobileBar ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.45)'), display: 'flex', alignItems: 'center', justifyContent: 'center', filter: !isMobileBar && isActive ? 'drop-shadow(0 0 2px rgba(255, 255, 255, 0.6)) drop-shadow(0 0 4px rgba(255, 255, 255, 0.25))' : 'none' }}>
               {tab.icon}
             </div>
             <span
               style={{
                 fontFamily: "'Inter', sans-serif",
-                fontSize: '10px',
+                fontSize: isMobileBar ? '11px' : '10px',
                 fontWeight: isActive ? 500 : 400,
-                color: isActive ? '#ffffff' : 'rgba(255,255,255,0.45)',
-                marginTop: '4px',
+                color: isActive ? '#ffffff' : (isMobileBar ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.45)'),
+                marginTop: isMobileBar ? undefined : '4px',
                 whiteSpace: 'nowrap',
                 transition: 'color 180ms ease',
-                textShadow: isActive ? '0 0 4px rgba(255, 255, 255, 0.3)' : 'none',
+                textShadow: !isMobileBar && isActive ? '0 0 4px rgba(255, 255, 255, 0.3)' : 'none',
               }}
             >
               {tab.id}

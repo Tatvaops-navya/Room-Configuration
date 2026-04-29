@@ -2,6 +2,47 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseServer } from '@/app/lib/supabase'
 import { createClient } from '@supabase/supabase-js'
 
+type QueryResult<T> = { data: T | null; error: { message?: string; details?: string; code?: string } | null }
+
+const RETRYABLE_ERROR_PATTERNS = [
+  /connect timeout/i,
+  /fetch failed/i,
+  /network/i,
+  /timed out/i,
+]
+
+function isRetryableSupabaseError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const err = error as { message?: unknown; details?: unknown }
+  const message = typeof err.message === 'string' ? err.message : ''
+  const details = typeof err.details === 'string' ? err.details : ''
+  const combined = `${message}\n${details}`
+  return RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(combined))
+}
+
+async function withSupabaseRetry<T>(
+  runner: () => Promise<QueryResult<T>>,
+  label: string,
+  maxAttempts = 3
+): Promise<QueryResult<T>> {
+  let lastResult: QueryResult<T> | null = null
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await runner()
+    lastResult = result
+    if (!result.error) return result
+    if (!isRetryableSupabaseError(result.error) || attempt === maxAttempts) return result
+    const waitMs = attempt * 400
+    console.warn(`${label} retry ${attempt}/${maxAttempts} after retryable Supabase error`)
+    await new Promise((resolve) => setTimeout(resolve, waitMs))
+  }
+  return (
+    lastResult ?? {
+      data: null,
+      error: { message: 'Unknown Supabase error after retries.' },
+    }
+  )
+}
+
 function mapTableDeskCatalogRow(row: Record<string, unknown>, kind: 'table' | 'desk' | 'decor' | 'cabinet' | 'dining') {
   const id = `${kind}_${row.id ?? ''}`
   const name = String(row.name ?? '')
@@ -603,11 +644,18 @@ export async function GET(request: NextRequest) {
 
       // Table / desk: table_products filtered by ui_target (coffee tables, side tables, IKEA conference/foldable vs study desks)
       if (component === 'table') {
-        const { data: rows, error } = await supabase
-          .from('table_products')
-          .select('*')
-          .eq('ui_target', 'table')
-          .order('id', { ascending: true })
+        const { data: rows, error } = await withSupabaseRetry(
+          async () => {
+            // Supabase query builders are Promise-like; wrap in async so the runner returns a real Promise<QueryResult<T>>.
+            const r = await supabase
+              .from('table_products')
+              .select('*')
+              .eq('ui_target', 'table')
+              .order('id', { ascending: true })
+            return { data: r.data, error: r.error }
+          },
+          'table_products (table)'
+        )
 
         if (error) {
           console.error('Supabase table_products (table) error:', error)
@@ -738,11 +786,17 @@ export async function GET(request: NextRequest) {
       }
 
       if (component === 'desk') {
-        const { data: rows, error } = await supabase
-          .from('table_products')
-          .select('*')
-          .eq('ui_target', 'desk')
-          .order('id', { ascending: true })
+        const { data: rows, error } = await withSupabaseRetry(
+          async () => {
+            const r = await supabase
+              .from('table_products')
+              .select('*')
+              .eq('ui_target', 'desk')
+              .order('id', { ascending: true })
+            return { data: r.data, error: r.error }
+          },
+          'table_products (desk)'
+        )
 
         if (error) {
           console.error('Supabase table_products (desk) error:', error)

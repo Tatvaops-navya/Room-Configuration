@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { LayoutDashboard, Building2, DoorOpen, SquarePen, X, ImagePlus, ArrowRight, Upload } from 'lucide-react';
+import { LayoutDashboard, Building2, DoorOpen, SquarePen, X, ImagePlus, ArrowRight, Upload, Phone, Mail, MessageCircle } from 'lucide-react';
 import {
   blobUrlToDataUrl,
   type RoomWizardCompletePayload,
@@ -105,17 +105,22 @@ export function RoomConfigStudio({
   onComplete?: (payload: RoomWizardCompletePayload) => void | Promise<void>
   initialSession?: RoomWizardSession | null
 }) {
+  const ROOM_UPLOAD_SLOTS = 3;
+  const [isMobile, setIsMobile] = useState(false);
   const [hoveredCard,     setHoveredCard]     = useState<string | null>(null);
   const [activeModal,     setActiveModal]     = useState<'internal' | 'external' | null>(null);
-  const [internalImages,  setInternalImages]  = useState<(string | null)[]>(Array(6).fill(null));
-  const [externalImages,  setExternalImages]  = useState<(string | null)[]>(Array(6).fill(null));
-  const fileRefs          = useRef<(HTMLInputElement | null)[]>(Array(6).fill(null));
+  const [internalImages,  setInternalImages]  = useState<(string | null)[]>(Array(ROOM_UPLOAD_SLOTS).fill(null));
+  const [externalImages,  setExternalImages]  = useState<(string | null)[]>(Array(ROOM_UPLOAD_SLOTS).fill(null));
+  const fileRefs          = useRef<(HTMLInputElement | null)[]>(Array(ROOM_UPLOAD_SLOTS).fill(null));
   const rafRef            = useRef<number | null>(null);
   const [analyzeProgress, setAnalyzeProgress] = useState(0);
   const [analysisDone,    setAnalysisDone]    = useState(false);
 
   const [selectedImage,   setSelectedImage]   = useState<number | null>(null);
   const [modalStep,       setModalStep]       = useState<'upload' | 'configMode' | 'styleSelect' | 'paletteSelect' | 'preferences'>('configMode');
+  const [supportModalOpen, setSupportModalOpen] = useState(false);
+  const [supportDragY, setSupportDragY] = useState(0);
+  const supportTouchStartYRef = useRef<number | null>(null);
   const [selectedConfigMode, setSelectedConfigMode] = useState<'purpose' | 'arrangement'>('purpose');
   const [styleCategoryTab, setStyleCategoryTab] = useState<RegionalStyleCategoryId>('indian');
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
@@ -145,8 +150,18 @@ export function RoomConfigStudio({
   );
 
   const minImages = 1;
-  const maxImages = 6;
+  const maxImages = ROOM_UPLOAD_SLOTS;
   const uploadImageFingerprint = uploadedImages.map((u) => u ?? '').join('\0');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Intentionally do not auto-open upload; user first chooses Internal/External.
 
   const handleFileChange = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -160,7 +175,7 @@ export function RoomConfigStudio({
   };
 
   const handleCloseModal = () => {
-    setUploadedImages(Array(6).fill(null));
+    setUploadedImages(Array(ROOM_UPLOAD_SLOTS).fill(null));
     setActiveModal(null);
     setAnalyzeProgress(0);
     setAnalysisDone(false);
@@ -177,6 +192,35 @@ export function RoomConfigStudio({
     setPreferenceAdditionalNotes('');
     setPreferenceReferenceImages([]);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  };
+
+  const closeSupportModal = () => {
+    setSupportModalOpen(false);
+    setSupportDragY(0);
+    supportTouchStartYRef.current = null;
+  };
+
+  const handleSupportTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const t = e.touches[0];
+    if (!t) return;
+    supportTouchStartYRef.current = t.clientY;
+  };
+
+  const handleSupportTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const startY = supportTouchStartYRef.current;
+    const t = e.touches[0];
+    if (startY == null || !t) return;
+    const delta = Math.max(0, t.clientY - startY);
+    setSupportDragY(Math.min(220, delta));
+  };
+
+  const handleSupportTouchEnd = () => {
+    if (supportDragY > 90) {
+      closeSupportModal();
+      return;
+    }
+    setSupportDragY(0);
+    supportTouchStartYRef.current = null;
   };
 
   const handlePreferenceReferenceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -335,8 +379,8 @@ export function RoomConfigStudio({
       const modal = session?.configType === 'external' ? 'external' : 'internal';
       setActiveModal(modal);
       if (session) {
-        const restored = Array(6).fill(null) as (string | null)[];
-        session.imagesDataUrl.slice(0, 6).forEach((src, i) => {
+        const restored = Array(ROOM_UPLOAD_SLOTS).fill(null) as (string | null)[];
+        session.imagesDataUrl.slice(0, ROOM_UPLOAD_SLOTS).forEach((src, i) => {
           restored[i] = src;
         });
         if (modal === 'external') {
@@ -435,7 +479,9 @@ export function RoomConfigStudio({
         flexDirection: 'column',
         overflow:      'hidden',
         fontFamily:    "'Inter', sans-serif",
-        paddingTop:    '48px',
+        // AppHeader already occupies the top 48px in the parent shell.
+        // Keeping extra padding here makes the mobile layout feel cramped and "cut off".
+        paddingTop:    0,
       }}
     >
       {/* Full-bleed hero background (same asset as Figma / results view) */}
@@ -509,7 +555,7 @@ export function RoomConfigStudio({
           zIndex:    1,
           flex:      1,
           display:   'flex',
-          padding:   '24px 32px 24px 136px',
+          padding:   isMobile ? '14px 12px 0px 12px' : '24px 32px 24px 136px',
           minHeight: 0,
           overflow:  'hidden',
         }}
@@ -524,18 +570,30 @@ export function RoomConfigStudio({
             flexDirection:  'column',
             alignItems:     'center',
             justifyContent: 'flex-start',
-            gap:            '40px',
-            paddingTop:     '28px',
-            paddingLeft:    '20px',
-            paddingRight:   '20px',
+            gap:            isMobile ? '14px' : '40px',
+            // Leave space for the fixed AppHeader (48px) + breathing room.
+            paddingTop:     isMobile ? '60px' : '28px',
+            paddingLeft:    isMobile ? '0px' : '20px',
+            paddingRight:   isMobile ? '0px' : '20px',
+            paddingBottom:  isMobile ? '96px' : '0px', // room for bottom nav / safe area
             overflowY:      'auto',
           }}
         >
           {/* Blur overlay — REMOVED from here, now lives at root level above */}
 
           {/* Progress tracker */}
-          <div style={{ position: 'relative', zIndex: 100, width: '100%', maxWidth: '720px', marginBottom: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+          <div
+            style={{
+              position: 'relative',
+              zIndex: 100,
+              width: '100%',
+              maxWidth: isMobile ? '100%' : '720px',
+              marginBottom: isMobile ? '0px' : '20px',
+              overflowX: isMobile ? 'auto' : 'visible',
+              display: isMobile ? 'none' : 'block',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', width: isMobile ? '560px' : '100%', margin: isMobile ? '0 auto' : undefined }}>
               {STEPS.map((step, i) => {
                 const prevDone = i > 0 && STEPS[i - 1].done && step.done;
                 const nextDone = i < STEPS.length - 1 && step.done && STEPS[i + 1].done;
@@ -616,9 +674,9 @@ export function RoomConfigStudio({
                     </div>
 
                     <span style={{
-                      marginTop:     '10px',
+                      marginTop:     isMobile ? '7px' : '10px',
                       color:         step.done ? 'rgba(255,255,255,0.74)' : 'rgba(255,255,255,0.22)',
-                      fontSize:      '11px',
+                      fontSize:      isMobile ? '10px' : '11px',
                       fontWeight:    step.done ? 500 : 400,
                       letterSpacing: '0.20px',
                       textAlign:     'center',
@@ -634,46 +692,53 @@ export function RoomConfigStudio({
           </div>
 
           {/* Hero text */}
-          <div style={{ width: '100%', maxWidth: '820px', textAlign: 'center' }}>
-            <h1 style={{ margin: 0, marginBottom: '13px', fontFamily: "'Inter', sans-serif", fontSize: '31px', fontWeight: 600, color: '#f4f0e6', letterSpacing: '0px', lineHeight: 1.18 }}>
+          <div style={{ width: '100%', maxWidth: isMobile ? 'min(520px, calc(100vw - 32px))' : '820px', textAlign: 'center' }}>
+            <h1 style={{ margin: 0, marginBottom: isMobile ? '10px' : '13px', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '38px' : '31px', fontWeight: 700, color: '#f4f0e6', letterSpacing: '-0.6px', lineHeight: isMobile ? 1.12 : 1.18 }}>
               AI Room Configuration Studio
             </h1>
-            <p style={{ margin: '0 auto', fontFamily: "'Inter', sans-serif", fontSize: '13.5px', fontWeight: 400, color: 'rgba(255,255,255,0.44)', letterSpacing: '-0.10px', lineHeight: '1.66', maxWidth: '520px' }}>
+            <p style={{ margin: '0 auto', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '13px' : '13.5px', fontWeight: 400, color: 'rgba(255,255,255,0.70)', letterSpacing: '-0.10px', lineHeight: '1.6', maxWidth: isMobile ? '360px' : '520px' }}>
               Choose full-room or custom-component mode, upload your images, lock the layout reference, then continue with style, palette, and preferences.
             </p>
           </div>
 
           {/* Configuration cards */}
-          <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
+          <div style={{ display: 'flex', gap: isMobile ? '14px' : '24px', alignItems: 'stretch', flexDirection: isMobile ? 'column' : 'row', width: '100%', maxWidth: isMobile ? 'min(420px, calc(100vw - 32px))' : 'none' }}>
             {CARDS.map(({ title, Icon, desc }) => {
               const isHovered  = hoveredCard === title;
               const isInternal = title === 'Internal Configuration';
               return (
                 <div
                   key={title}
-                  onMouseEnter={() => setHoveredCard(title)}
-                  onMouseLeave={() => setHoveredCard(null)}
+                  onMouseEnter={isMobile ? undefined : () => setHoveredCard(title)}
+                  onMouseLeave={isMobile ? undefined : () => setHoveredCard(null)}
                   style={{
-                    width:                '300px',
-                    padding:              '38px 28px 36px',
-                    transform:            isHovered ? 'translateY(-5px)' : 'translateY(0)',
+                    width:                isMobile ? '100%' : '300px',
+                    minHeight:            isMobile ? '186px' : undefined,
+                    padding:              isMobile ? '20px 16px 18px' : '38px 28px 36px',
+                    transform:            isMobile ? 'translateY(0)' : isHovered ? 'translateY(-5px)' : 'translateY(0)',
                     display:              'flex',
                     flexDirection:        'column',
                     alignItems:           'center',
-                    gap:                  '14px',
+                    gap:                  isMobile ? '10px' : '14px',
                     cursor:               'pointer',
                     transition:           'all 200ms ease',
                     ...glassCardStyle,
-                    border:               isHovered ? '1px solid rgba(255,255,255,0.22)' : glassCardStyle.border,
+                    background:           isMobile ? 'rgba(10,10,12,0.72)' : glassCardStyle.background,
+                    border:               isMobile ? '1px solid rgba(255,255,255,0.16)' : isHovered ? '1px solid rgba(255,255,255,0.22)' : glassCardStyle.border,
+                    boxShadow:            isMobile
+                      ? 'inset 0 1px 0 rgba(255,255,255,0.06), 0 18px 42px rgba(0,0,0,0.50)'
+                      : isHovered
+                        ? 'inset 0 0 0 1px rgba(255,255,255,0.14), inset 0 1px 0 rgba(255,255,255,0.10), 0 28px 72px rgba(0,0,0,0.5), 0 0 40px rgba(255,255,255,0.06)'
+                        : glassCardStyle.boxShadow,
                     boxShadow:            isHovered
                       ? 'inset 0 0 0 1px rgba(255,255,255,0.14), inset 0 1px 0 rgba(255,255,255,0.10), 0 28px 72px rgba(0,0,0,0.5), 0 0 40px rgba(255,255,255,0.06)'
                       : glassCardStyle.boxShadow,
                   }}
                 >
                   <div style={{
-                    width:          '58px',
-                    height:         '58px',
-                    borderRadius:   '16px',
+                    width:          isMobile ? '50px' : '58px',
+                    height:         isMobile ? '50px' : '58px',
+                    borderRadius:   isMobile ? '14px' : '16px',
                     background:     isHovered ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.055)',
                     border:         isHovered ? '1px solid rgba(255,255,255,0.24)' : '1px solid rgba(255,255,255,0.09)',
                     boxShadow:      isHovered ? '0 0 20px rgba(255,255,255,0.12)' : 'none',
@@ -683,14 +748,14 @@ export function RoomConfigStudio({
                     flexShrink:     0,
                     transition:     'all 200ms ease',
                   }}>
-                    <Icon size={26} style={{ color: isHovered ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.80)', filter: isHovered ? 'drop-shadow(0 0 8px rgba(255,255,255,0.45))' : 'none', transition: 'all 200ms ease' }} />
+                    <Icon size={isMobile ? 22 : 26} style={{ color: isHovered ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.80)', filter: isHovered ? 'drop-shadow(0 0 8px rgba(255,255,255,0.45))' : 'none', transition: 'all 200ms ease' }} />
                   </div>
 
-                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '18px', fontWeight: 600, color: 'rgba(255,255,255,0.92)', textAlign: 'center', lineHeight: 1.22 }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '22px' : '18px', fontWeight: 650, color: 'rgba(255,255,255,0.94)', textAlign: 'center', lineHeight: 1.22 }}>
                     {title}
                   </span>
 
-                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '11px', fontWeight: 400, color: 'rgba(255,255,255,0.75)', textAlign: 'center', lineHeight: '1.62', maxWidth: '218px' }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '13px' : '11px', fontWeight: 400, color: 'rgba(255,255,255,0.78)', textAlign: 'center', lineHeight: '1.55', maxWidth: isMobile ? '320px' : '218px' }}>
                     {desc}
                   </span>
 
@@ -698,21 +763,22 @@ export function RoomConfigStudio({
                     onClick={isInternal ? () => setActiveModal('internal') : () => setActiveModal('external')}
                     style={{
                       marginTop:      '8px',
-                      background:     isHovered ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.07)',
-                      borderRadius:   '10px',
-                      height:         '43px',
-                      width:          '140px',
+                      background:     isMobile ? 'rgba(255,255,255,0.08)' : isHovered ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.07)',
+                      borderRadius:   isMobile ? '14px' : '10px',
+                      height:         isMobile ? '52px' : '43px',
+                      width:          isMobile ? '100%' : '140px',
+                      maxWidth:       isMobile ? '260px' : undefined,
                       display:        'flex',
                       alignItems:     'center',
                       justifyContent: 'center',
                       cursor:         'pointer',
-                      border:         isHovered ? '1.5px solid rgba(255,255,255,0.80)' : '1px solid rgba(255,255,255,0.11)',
-                      boxShadow:      isHovered ? '0px 0px 18px rgba(255,255,255,0.22), inset 0px 1px 2px rgba(255,255,255,0.08)' : 'none',
+                      border:         isMobile ? '1px solid rgba(255,255,255,0.18)' : isHovered ? '1.5px solid rgba(255,255,255,0.80)' : '1px solid rgba(255,255,255,0.11)',
+                      boxShadow:      isMobile ? 'inset 0 1px 0 rgba(255,255,255,0.06)' : isHovered ? '0px 0px 18px rgba(255,255,255,0.22), inset 0px 1px 2px rgba(255,255,255,0.08)' : 'none',
                       transition:     'all 200ms ease',
                       flexShrink:     0,
                     }}
                   >
-                    <span style={{ fontFamily: "'Inter', sans-serif", color: isHovered ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.80)', fontSize: '13px', fontWeight: 500, letterSpacing: '0.10px', transition: 'color 200ms ease' }}>
+                    <span style={{ fontFamily: "'Inter', sans-serif", color: isHovered ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.80)', fontSize: isMobile ? '15px' : '13px', fontWeight: 500, letterSpacing: '0.10px', transition: 'color 200ms ease' }}>
                       Get Started
                     </span>
                   </div>
@@ -724,15 +790,173 @@ export function RoomConfigStudio({
         </div>
       </div>
 
-      {/* Floating bot — zIndex:60 keeps it above blur (50) when modal is open */}
-      <div style={{ position: 'absolute', bottom: '24px', right: '30px', zIndex: 60, cursor: 'pointer' }}>
-        <img
-          src={imgImageRobot}
-          alt="AI Assistant"
-          className="rcs-bot"
-          style={{ width: '78px', height: '78px', objectFit: 'contain', display: 'block' }}
-        />
-      </div>
+      {/* Floating support icon (hide on mobile to reduce clutter) */}
+      {!isMobile && (
+        <div
+          onClick={() => setSupportModalOpen(true)}
+          style={{ position: 'absolute', bottom: '24px', right: '30px', zIndex: 60, cursor: 'pointer', display: 'block' }}
+        >
+          <img
+            src={imgImageRobot}
+            alt="AI Assistant"
+            className="rcs-bot"
+            style={{ width: '78px', height: '78px', objectFit: 'contain', display: 'block' }}
+          />
+        </div>
+      )}
+
+      {supportModalOpen && (
+        <div
+          onClick={closeSupportModal}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 350,
+            background: 'rgba(0,0,0,0.42)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '18px 12px',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={handleSupportTouchStart}
+            onTouchMove={handleSupportTouchMove}
+            onTouchEnd={handleSupportTouchEnd}
+            onTouchCancel={handleSupportTouchEnd}
+            style={{
+              width: 'min(460px, calc(100vw - 24px))',
+              borderRadius: '24px',
+              background: 'rgba(16,16,18,0.86)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              boxShadow: '0 24px 64px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.12)',
+              backdropFilter: 'blur(22px)',
+              WebkitBackdropFilter: 'blur(22px)',
+              padding: '18px 16px 16px',
+              transform: `translateY(${supportDragY}px)`,
+              transition: supportDragY > 0 ? 'none' : 'transform 220ms ease',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: '20px', fontWeight: 600, color: '#f5f5f5', lineHeight: 1.2 }}>
+                  Need Help? Contact Us
+                </div>
+                <div style={{ marginTop: 4, fontFamily: "'Inter', sans-serif", fontSize: '12px', color: 'rgba(255,255,255,0.72)' }}>
+                  We&apos;re here to assist you anytime
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeSupportModal}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: 'rgba(255,255,255,0.85)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+                aria-label="Close contact support"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <a
+              href="tel:+918056539544"
+              onClick={(e) => {
+                e.preventDefault();
+                window.location.href = 'tel:+918056539544';
+              }}
+              style={{
+                marginTop: 14,
+                minHeight: 56,
+                width: '100%',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.18)',
+                background: 'rgba(255,255,255,0.08)',
+                padding: '12px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                textDecoration: 'none',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: 12, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+                <Phone size={16} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#fff' }}>Call Support</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>8056539544</div>
+              </div>
+            </a>
+
+            <a
+              href="https://mail.google.com/mail/?view=cm&fs=1&to=visionsupport@tatvaops.com&su=TatvaOps%20Support%20Request&body=Hi%20TatvaOps%20Support%2C%0A%0AIssue%20details%3A%0A"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                marginTop: 10,
+                minHeight: 56,
+                width: '100%',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.18)',
+                background: 'rgba(255,255,255,0.08)',
+                padding: '12px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                textDecoration: 'none',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: 12, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+                <Mail size={16} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#fff' }}>Email Support</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>visionsupport@tatvaops.com</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 2 }}>Response within 24 hrs</div>
+              </div>
+            </a>
+
+            <div
+              style={{
+                marginTop: 10,
+                minHeight: 56,
+                width: '100%',
+                borderRadius: 16,
+                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'rgba(255,255,255,0.04)',
+                padding: '12px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                boxSizing: 'border-box',
+                opacity: 0.55,
+              }}
+            >
+              <div style={{ width: 34, height: 34, borderRadius: 12, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.16)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
+                <MessageCircle size={16} />
+              </div>
+              <div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, fontWeight: 600, color: '#fff' }}>Chat Support</div>
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: 'rgba(255,255,255,0.72)' }}>Coming Soon</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── MODAL ──────────────────────────────────────────────────── */}
       {activeModal && (
@@ -740,24 +964,26 @@ export function RoomConfigStudio({
           onClick={handleCloseModal}
           style={{
             position:       'fixed',
-            top:            '48px',
-            left:           '112px',
+            top:            isMobile ? '48px' : '48px',
+            left:           isMobile ? '0px' : '112px',
             right:          0,
             bottom:         0,
             zIndex:         200,
             display:        'flex',
             alignItems:     'center',
             justifyContent: 'center',
-            paddingTop:     '80px',
-            paddingBottom:  '24px',
+            paddingTop:     isMobile ? '12px' : '80px',
+            paddingBottom:  isMobile ? '12px' : '24px',
+            paddingLeft:    isMobile ? '10px' : '0px',
+            paddingRight:   isMobile ? '10px' : '0px',
             overflowY:      'auto',
           }}
         >
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              width:                '620px',
-              minHeight:            '441px',
+              width:                isMobile ? '100%' : '620px',
+              minHeight:            isMobile ? 'min(82vh, 620px)' : '441px',
               maxHeight:            'min(90vh, 780px)',
               borderRadius:         '24px',
               background:           'rgba(18,18,20,0.82)',
@@ -797,18 +1023,18 @@ export function RoomConfigStudio({
                   </button>
                 </div>
 
-                {/* Upload grid 3×2 */}
+                {/* Upload grid (3 slots) */}
                 <div style={{
-                  flex:                '1',
-                  minHeight:           0,
-                  padding:             '14px 32px',
+                  flex:                isMobile ? '0 0 auto' : '1',
+                  minHeight:           isMobile ? 'auto' : 0,
+                  padding:             isMobile ? '12px 18px' : '14px 32px',
                   display:             'grid',
                   gridTemplateColumns: 'repeat(3, 1fr)',
-                  gridTemplateRows:    'repeat(2, 1fr)',
-                  columnGap:           '16px',
-                  rowGap:              '16px',
+                  gridTemplateRows:    'repeat(1, 1fr)',
+                  columnGap:           isMobile ? '10px' : '16px',
+                  rowGap:              isMobile ? '10px' : '16px',
                 }}>
-                  {Array.from({ length: 6 }, (_, i) => {
+                  {Array.from({ length: ROOM_UPLOAD_SLOTS }, (_, i) => {
                     const imgUrl       = uploadedImages[i];
                     const isSelected   = selectedImage === i;
                     const inSelectMode = analysisDone;
@@ -823,6 +1049,7 @@ export function RoomConfigStudio({
                           }
                         }}
                         style={{
+                          height:               isMobile ? '168px' : undefined,
                           borderRadius:         '12px',
                           border:               inSelectMode && imgUrl
                             ? isSelected ? '2px solid rgba(255,255,255,0.90)' : '1px solid rgba(255,255,255,0.28)'
@@ -1160,10 +1387,12 @@ export function RoomConfigStudio({
                   aria-label="Style region"
                   style={{
                     display: 'flex',
-                    flexWrap: 'wrap',
+                    flexWrap: isMobile ? 'nowrap' : 'wrap',
                     gap: '8px',
-                    padding: '12px 32px 0',
+                    padding: isMobile ? '10px 14px 0' : '12px 32px 0',
                     flexShrink: 0,
+                    overflowX: isMobile ? 'auto' : 'visible',
+                    overflowY: 'hidden',
                   }}
                 >
                   {REGIONAL_STYLE_TABS.map((tab) => {
@@ -1176,16 +1405,18 @@ export function RoomConfigStudio({
                         aria-selected={active}
                         onClick={() => setStyleCategoryTab(tab.id)}
                         style={{
-                          padding: '8px 14px',
+                          padding: isMobile ? '9px 14px' : '8px 14px',
                           borderRadius: '999px',
                           border: active ? '1.5px solid rgba(255,255,255,0.85)' : '1px solid rgba(255,255,255,0.14)',
                           background: active ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
                           color: active ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.55)',
                           fontFamily: "'Inter', sans-serif",
-                          fontSize: '12px',
+                          fontSize: isMobile ? '13px' : '12px',
                           fontWeight: active ? 600 : 500,
                           cursor: 'pointer',
                           transition: 'all 160ms ease',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
                         }}
                       >
                         {tab.label}
@@ -1200,11 +1431,11 @@ export function RoomConfigStudio({
                   style={{
                     flex:                '1',
                     minHeight:           0,
-                    padding:             '14px 32px',
+                    padding:             isMobile ? '14px 14px 8px' : '14px 32px',
                     display:             'grid',
-                    gridTemplateColumns: 'repeat(4, 1fr)',
-                    columnGap:           '16px',
-                    rowGap:              '16px',
+                    gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, 1fr)',
+                    columnGap:           isMobile ? '10px' : '16px',
+                    rowGap:              isMobile ? '14px' : '16px',
                     overflowY:           'auto',
                     alignContent:        'start',
                   }}
@@ -1220,12 +1451,14 @@ export function RoomConfigStudio({
                           flexDirection: 'column',
                           alignItems:    'center',
                           cursor:        'pointer',
+                          minWidth:      0,
                         }}
                       >
                         <div style={{
-                          width:        '100px',
-                          height:       '100px',
-                          borderRadius: '50%',
+                          width:        isMobile ? '100%' : '100px',
+                          maxWidth:     isMobile ? '145px' : '100px',
+                          aspectRatio:  '1 / 1',
+                          borderRadius: isMobile ? '16px' : '50%',
                           overflow:     'hidden',
                           flexShrink:   0,
                           border:       isSel
@@ -1237,20 +1470,23 @@ export function RoomConfigStudio({
                           <img
                             src={style.img}
                             alt={style.name}
+                            loading="lazy"
                             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                           />
                         </div>
 
                         <span style={{
-                          marginTop:  '8px',
-                          maxWidth:   '112px',
+                          marginTop:  isMobile ? '7px' : '8px',
+                          maxWidth:   isMobile ? '100%' : '112px',
                           fontFamily: "'Inter', sans-serif",
-                          fontSize:   '12px',
+                          fontSize:   isMobile ? '12.5px' : '12px',
                           fontWeight: isSel ? 500 : 400,
                           color:      isSel ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.50)',
                           textAlign:  'center',
                           lineHeight: 1.35,
                           transition: 'all 180ms ease',
+                          whiteSpace: 'normal',
+                          wordBreak:  'break-word',
                         }}>
                           {style.name}
                         </span>
@@ -1260,13 +1496,13 @@ export function RoomConfigStudio({
                 </div>
 
                 {/* Footer */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', padding: '12px 32px 16px' }}>
-                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '11.5px', fontWeight: 400, color: 'rgba(255,255,255,0.28)', marginRight: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: isMobile ? '8px' : '12px', padding: isMobile ? '10px 14px 14px' : '12px 32px 16px' }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '11px' : '11.5px', fontWeight: 400, color: 'rgba(255,255,255,0.28)', marginRight: 'auto' }}>
                     {selectedRegionalStyle ? `"${selectedRegionalStyle.name}" selected` : 'No style selected'}
                   </span>
                   <button
                     onClick={() => setModalStep('upload')}
-                    style={{ height: '40px', padding: '0 22px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.62)', transition: 'all 180ms ease' }}
+                    style={{ height: isMobile ? '44px' : '40px', padding: isMobile ? '0 16px' : '0 22px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '14px' : '13px', fontWeight: 500, color: 'rgba(255,255,255,0.62)', transition: 'all 180ms ease' }}
                     onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.09)'; e.currentTarget.style.color = 'rgba(255,255,255,0.85)'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = 'rgba(255,255,255,0.62)'; }}
                   >
@@ -1275,7 +1511,7 @@ export function RoomConfigStudio({
                   <button
                     disabled={!selectedStyleId}
                     onClick={() => { if (selectedStyleId) setModalStep('paletteSelect'); }}
-                    style={{ height: '40px', padding: '0 26px', borderRadius: '10px', background: selectedStyleId ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.04)', border: selectedStyleId ? '1.5px solid rgba(255,255,255,0.80)' : '1px solid rgba(255,255,255,0.08)', boxShadow: selectedStyleId ? '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)' : 'none', cursor: selectedStyleId ? 'pointer' : 'not-allowed', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: selectedStyleId ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)', transition: 'all 200ms ease', opacity: selectedStyleId ? 1 : 0.55 }}
+                    style={{ height: isMobile ? '44px' : '40px', padding: isMobile ? '0 18px' : '0 26px', borderRadius: '10px', background: selectedStyleId ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.04)', border: selectedStyleId ? '1.5px solid rgba(255,255,255,0.80)' : '1px solid rgba(255,255,255,0.08)', boxShadow: selectedStyleId ? '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)' : 'none', cursor: selectedStyleId ? 'pointer' : 'not-allowed', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '14px' : '13px', fontWeight: 500, color: selectedStyleId ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)', transition: 'all 200ms ease', opacity: selectedStyleId ? 1 : 0.55 }}
                   >
                     Continue
                   </button>
@@ -1287,13 +1523,13 @@ export function RoomConfigStudio({
             {modalStep === 'paletteSelect' && (
               <>
                 {/* Header */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '16px 32px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: isMobile ? '12px 14px 0' : '16px 32px 0' }}>
                   <div>
-                    <h2 style={{ margin: 0, marginBottom: '7px', fontFamily: "'Inter', sans-serif", fontSize: '20px', fontWeight: 600, color: '#f4f0e6', lineHeight: 1.2 }}>
+                    <h2 style={{ margin: 0, marginBottom: isMobile ? '5px' : '7px', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '28px' : '20px', fontWeight: 600, color: '#f4f0e6', lineHeight: 1.15 }}>
                       Select a color palette
-                      <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 400, color: 'rgba(255,255,255,0.32)', marginLeft: '8px' }}>(Optional)</span>
+                      <span style={{ fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '12px' : '13px', fontWeight: 400, color: 'rgba(255,255,255,0.32)', marginLeft: '8px' }}>(Optional)</span>
                     </h2>
-                    <p style={{ margin: 0, fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 400, color: 'rgba(255,255,255,0.42)', lineHeight: 1.55 }}>
+                    <p style={{ margin: 0, fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '12px' : '13px', fontWeight: 400, color: 'rgba(255,255,255,0.50)', lineHeight: 1.45, maxWidth: isMobile ? '290px' : 'none' }}>
                       Choose a color palette to guide the AI.
                     </p>
                   </div>
@@ -1313,12 +1549,12 @@ export function RoomConfigStudio({
                   style={{
                     flex:                '1',
                     minHeight:           0,
-                    padding:             '12px 32px',
+                    padding:             isMobile ? '12px 14px 8px' : '12px 32px',
                     display:             'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(3, 1fr)',
                     gridAutoRows:        'auto',
-                    columnGap:           '16px',
-                    rowGap:              '20px',
+                    columnGap:           isMobile ? '10px' : '16px',
+                    rowGap:              isMobile ? '14px' : '20px',
                     overflowY:           'auto',
                     alignContent:        'start',
                   }}
@@ -1338,17 +1574,19 @@ export function RoomConfigStudio({
                           flexDirection: 'column',
                           alignItems:    'center',
                           cursor:        'pointer',
-                          padding:       '8px',
+                          padding:       isMobile ? '4px' : '8px',
                           borderRadius:  '12px',
                           border:        '1.5px solid transparent',
-                          margin:        '-8px',
+                          margin:        isMobile ? '0px' : '-8px',
+                          minWidth:      0,
                         }}
                       >
                         {/* Gradient swatch — floating box with no outer card */}
                         <div
                           style={{
-                            width:        '100px',
-                            height:       '100px',
+                            width:        isMobile ? '100%' : '100px',
+                            maxWidth:     isMobile ? '150px' : '100px',
+                            aspectRatio:  '1 / 1',
                             borderRadius: '12px',
                             background:   getPaletteGradient(palette.name, palette.colors),
                             border:       isSel ? '2px solid rgba(255,255,255,0.70)' : 'none',
@@ -1360,9 +1598,9 @@ export function RoomConfigStudio({
 
                         {/* Palette name — outside the box, 8px below */}
                         <div style={{
-                          marginTop:  '8px',
+                          marginTop:  isMobile ? '6px' : '8px',
                           fontFamily: "'Inter', sans-serif",
-                          fontSize:   '11px',
+                          fontSize:   isMobile ? '11.5px' : '11px',
                           fontWeight: isSel ? 500 : 400,
                           color:      isSel ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.72)',
                           lineHeight: 1.3,
@@ -1379,7 +1617,7 @@ export function RoomConfigStudio({
                         <div style={{
                           marginTop:  '4px',
                           fontFamily: "'Inter', sans-serif",
-                          fontSize:   '12px',
+                          fontSize:   isMobile ? '10.5px' : '12px',
                           fontWeight: 400,
                           color:      '#9CA3AF',
                           lineHeight: 1.3,
@@ -1387,6 +1625,11 @@ export function RoomConfigStudio({
                           width:      '100%',
                           whiteSpace: 'normal',
                           wordBreak:  'break-word',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
                         }}>
                           {palette.desc}
                         </div>
@@ -1396,13 +1639,13 @@ export function RoomConfigStudio({
                 </div>
 
                 {/* Footer */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', padding: '12px 32px 16px' }}>
-                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '11.5px', fontWeight: 400, color: 'rgba(255,255,255,0.28)', marginRight: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: isMobile ? '8px' : '12px', padding: isMobile ? '10px 14px 14px' : '12px 32px 16px' }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '11px' : '11.5px', fontWeight: 400, color: 'rgba(255,255,255,0.28)', marginRight: 'auto' }}>
                     {selectedPalette ? `"${selectedPalette}" selected` : 'No palette selected'}
                   </span>
                   <button
                     onClick={() => setModalStep('styleSelect')}
-                    style={{ height: '40px', padding: '0 22px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.62)', transition: 'all 180ms ease' }}
+                    style={{ height: isMobile ? '44px' : '40px', padding: isMobile ? '0 16px' : '0 22px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '14px' : '13px', fontWeight: 500, color: 'rgba(255,255,255,0.62)', transition: 'all 180ms ease' }}
                     onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.09)'; e.currentTarget.style.color = 'rgba(255,255,255,0.85)'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = 'rgba(255,255,255,0.62)'; }}
                   >
@@ -1410,7 +1653,7 @@ export function RoomConfigStudio({
                   </button>
                   <button
                     onClick={() => setModalStep('preferences')}
-                    style={{ height: '40px', padding: '0 26px', borderRadius: '10px', background: 'rgba(0,0,0,0.45)', border: '1.5px solid rgba(255,255,255,0.80)', boxShadow: '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.92)', transition: 'all 200ms ease' }}
+                    style={{ height: isMobile ? '44px' : '40px', padding: isMobile ? '0 18px' : '0 26px', borderRadius: '10px', background: 'rgba(0,0,0,0.45)', border: '1.5px solid rgba(255,255,255,0.80)', boxShadow: '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)', cursor: 'pointer', fontFamily: "'Inter', sans-serif", fontSize: isMobile ? '14px' : '13px', fontWeight: 500, color: 'rgba(255,255,255,0.92)', transition: 'all 200ms ease' }}
                     onMouseEnter={e => { e.currentTarget.style.boxShadow = '0px 0px 26px rgba(255,255,255,0.48), inset 0px 1px 2px rgba(255,255,255,0.08)'; }}
                     onMouseLeave={e => { e.currentTarget.style.boxShadow = '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)'; }}
                   >

@@ -214,20 +214,29 @@ export async function postCustomizationGenerate(opts: {
   }
 
   const layoutAnchor = opts.layoutAnchorImage?.trim() || cur
+  const currentResultDataUrl = await ensureGenerateImageDataUrl(cur)
+  if (typeof currentResultDataUrl === 'object' && 'error' in currentResultDataUrl) {
+    return { error: currentResultDataUrl.error }
+  }
+  const layoutAnchorDataUrlResult = await ensureGenerateImageDataUrl(layoutAnchor)
+  const layoutAnchorDataUrl =
+    typeof layoutAnchorDataUrlResult === 'string' && layoutAnchorDataUrlResult.trim()
+      ? layoutAnchorDataUrlResult
+      : currentResultDataUrl
   const optimizedLayoutAnchor =
-    layoutAnchor && layoutAnchor.includes(',')
-      ? await optimizeImageDataUrlForApi(layoutAnchor, {
+    layoutAnchorDataUrl && layoutAnchorDataUrl.includes(',')
+      ? await optimizeImageDataUrlForApi(layoutAnchorDataUrl, {
           maxDimension: 1400,
           quality: 0.82,
         })
-      : layoutAnchor
+      : layoutAnchorDataUrl
   const optimizedCurrentResult =
-    cur && cur.includes(',')
-      ? await optimizeImageDataUrlForApi(cur, {
+    currentResultDataUrl && currentResultDataUrl.includes(',')
+      ? await optimizeImageDataUrlForApi(currentResultDataUrl, {
           maxDimension: 1400,
           quality: 0.82,
         })
-      : cur
+      : currentResultDataUrl
 
   let res: Response
   try {
@@ -237,9 +246,9 @@ export async function postCustomizationGenerate(opts: {
       body: JSON.stringify({
         configType: opts.configType,
         configMode: 'customization',
-        images: [optimizedLayoutAnchor || layoutAnchor],
+        images: [optimizedLayoutAnchor || layoutAnchorDataUrl],
         layoutImageIndex: 0,
-        currentResultImage: optimizedCurrentResult || cur,
+        currentResultImage: optimizedCurrentResult || currentResultDataUrl,
         customizationStyles: opts.customizationStyles,
         customizationLabels: opts.customizationLabels,
         vastuEnabled: false,
@@ -790,6 +799,8 @@ export type PostRoomGenerateOptions = {
   /** After first generation: send last result so the API applies new style/palette to it (locked layout / style-only path). */
   currentResultImage?: string | null
   shuffle?: boolean
+  /** Enforce strict layout preservation in generation prompting. */
+  strictLayoutLock?: boolean
 }
 
 export async function postRoomGenerate(
@@ -892,6 +903,7 @@ export async function postRoomGenerate(
         images: imagesPayload,
         configMode: effectiveMode,
         layoutImageIndex: layoutIndexPayload,
+        strictLayoutLock: options?.strictLayoutLock !== false,
         purposeInput: effectiveMode === 'purpose' ? purposeInput : undefined,
         arrangementConfig,
         ...(omitStylePalette || !styleTrimmed ? {} : { selectedStyle: styleTrimmed }),
