@@ -37,13 +37,16 @@ Answer INTERNAL if the photo is taken from INSIDE an enclosed building space, in
 
 Answer EXTERNAL only if the image is clearly NOT an indoor room frame, for example:
 - Building facade, compound, gate, driveway, outdoor parking, sky, garden as the main subject from outside
+- A house or building under construction photographed FROM OUTSIDE (yard, street, compound): exterior concrete shell, scaffolding around the building, roofline seen from outdoors, construction site viewed while standing outside the structure
 - Screenshots of apps, dashboards, charts, or browser/UI
 - Documents, scans, or mostly text/graphics
 - Selfies or object close-ups with no visible room shell (walls/floor/ceiling) at all
 
-Important: Lack of furniture, "unfinished" walls, or construction-in-progress does NOT make it EXTERNAL. If you see interior walls, slab floor, or ceiling from inside a structure, that is INTERNAL.
+Important: Lack of furniture, "unfinished" walls, or construction-in-progress INSIDE a room does NOT make it EXTERNAL. If you see interior walls, slab floor, or ceiling from INSIDE a structure, that is INTERNAL.
 
-If the scene could be either a very empty interior or ambiguous, prefer INTERNAL.
+But if the photographer is clearly OUTSIDE looking at the building (sky, open ground, compound), that is EXTERNAL even if the building is unfinished.
+
+When sky, horizon, or open yard/compound fills much of the frame and you are not clearly inside a walled room, answer EXTERNAL.
 
 Reply with exactly one word on a single line: INTERNAL or EXTERNAL.
 Do not add any other text, explanation, or punctuation.`
@@ -59,31 +62,23 @@ When in doubt, answer INTERNAL.
 Reply with exactly one word on a single line: INTERNAL or EXTERNAL.
 Do not add any other text, explanation, or punctuation.`
 
-const INTERNAL_REJECT_CHECK_PROMPT = `You will receive ONE image that was suspected to be wrong for INTERNAL (interior) mode.
+/**
+ * Second gate for INTERNAL mode: first model pass often mislabels outdoor construction as indoor.
+ * Fail closed: OUTDOOR or ambiguous → treat as invalid for interior workflow.
+ */
+const STRICT_INTERIOR_SCENE_PROMPT = `You will receive ONE photograph.
 
-Answer YES only if the image is clearly NOT an indoor scene, for example:
-- outdoor building exterior, facade, compound, street, sky, garden as primary view from outside
-- document, screenshot, UI, chart, or mostly text
-- close-up of an object with no walls/floor/ceiling of a room visible
+Answer OUTDOOR if the camera is clearly OUTSIDE a building or in an open site, for example:
+- House/building under construction viewed from the yard, street, compound, or sidewalk (exterior walls, scaffolding, roof edge from outside, construction site walk-around)
+- Facade, elevation, gate, driveway, garden or sky as the main scene
+- Any view where the photographer is not standing inside an enclosed room/shell with a floor slab underfoot
 
-Answer NO (do NOT reject) if ANY of these apply—these are valid INTERNAL:
-- empty, unfurnished, or bare room
-- semi-constructed, under-renovation, shell space, exposed concrete or unfinished walls inside a building
-- single window in a room with unfinished interior; camera clearly inside the room
-- corridor, lobby, stairwell inside a building
+Answer INDOOR only if the camera is clearly INSIDE an enclosed building space (finished room, bare room, corridor, lobby, indoor stairwell, or interior construction shell with clear indoor framing). Hotel lobbies, reception areas, and furnished common areas count as INDOOR.
 
-Reply with exactly one word: YES or NO.`
+When unsure, answer INDOOR (prefer allowing real interior photos over blocking them).
 
-const EXTERNAL_REJECT_CHECK_PROMPT = `You will receive ONE image that is suspected to be invalid for EXTERNAL mode.
-
-Answer YES only if the image is clearly NOT a building exterior scene, such as:
-- indoor room/interior space
-- document/screenshot/UI/table/chart
-- unrelated object close-up with no exterior/building context
-
-Answer NO if it still looks like an exterior building/property frame (including partial facade/compound/outdoor angles).
-
-Reply with exactly one word: YES or NO.`
+Reply with exactly one word on a single line: OUTDOOR or INDOOR.
+Do not add any other text.`
 
 function normalizeMimeType(mimeType: string): string {
   const supported = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
@@ -213,9 +208,10 @@ export async function POST(request: NextRequest) {
       return null
     }
 
-    const rejectCheck = async (
+    /** Mandatory second gate for interior uploads — catches outdoor/construction shots mislabeled INTERNAL. */
+    const strictInteriorOutdoorCheck = async (
       imgPart: { inlineData: { data: string; mimeType: string } }
-    ): Promise<boolean | null> => {
+    ): Promise<'outdoor' | 'indoor' | null> => {
       const response = await fetchGeminiText(
         geminiModel,
         geminiApiKey,
@@ -224,16 +220,16 @@ export async function POST(request: NextRequest) {
             {
               parts: [
                 {
-                  text:
-                    expectedType === 'internal'
-                      ? INTERNAL_REJECT_CHECK_PROMPT
-                      : EXTERNAL_REJECT_CHECK_PROMPT,
+                  text: 'You MUST reply with exactly one word: OUTDOOR or INDOOR.',
                 },
                 imgPart,
+                {
+                  text: STRICT_INTERIOR_SCENE_PROMPT,
+                },
               ],
             },
           ],
-          generationConfig: { temperature: 0, maxOutputTokens: 8 },
+          generationConfig: { temperature: 0, maxOutputTokens: 16 },
         })
       )
       if (!response) return null
@@ -244,28 +240,45 @@ export async function POST(request: NextRequest) {
         ? parts.map((p: { text?: string }) => p?.text ?? '').join('')
         : ''
       ).trim().toUpperCase()
-      if (/\bYES\b/.test(rawText) && !/\bNO\b/.test(rawText)) return true
-      if (/\bNO\b/.test(rawText) && !/\bYES\b/.test(rawText)) return false
+      const hasOutdoor = /\bOUTDOOR\b/.test(rawText)
+      const hasIndoor = /\bINDOOR\b/.test(rawText)
+      if (hasOutdoor && hasIndoor) return 'outdoor'
+      if (hasOutdoor && !hasIndoor) return 'outdoor'
+      if (hasIndoor && !hasOutdoor) return 'indoor'
       return null
     }
 
     const results = await Promise.all(imageParts.map((img) => classifySingle(img)))
     const invalidImageIndices: number[] = []
+
     for (let idx = 0; idx < results.length; idx++) {
       const detected = results[idx]
-      if (detected === expectedType) continue
+      const imgPart = imageParts[idx]
 
-      // Second-pass verification for suspected mismatches to reduce false negatives.
-      const check = await rejectCheck(imageParts[idx])
-      if (check === true) {
-        invalidImageIndices.push(idx)
-      } else if (check === null) {
-        // If unsure after second pass, treat as valid to avoid false warnings on correct room sets.
-        // Hard failures are already handled at request level.
+      if (expectedType === 'internal') {
+        // Hard reject: primary pass is confident this is not an indoor room type.
+        if (detected === 'external') {
+          invalidImageIndices.push(idx)
+          continue
+        }
+        // For primary internal OR null (ambiguous): only reject if strict pass is
+        // explicitly OUTDOOR. null/indoor from strict must not block valid lobbies, etc.
+        const strict = await strictInteriorOutdoorCheck(imgPart)
+        if (strict === 'outdoor') {
+          invalidImageIndices.push(idx)
+        }
         continue
-      } else {
-        // check === false => image should not be rejected
-        continue
+      }
+
+      if (expectedType === 'external') {
+        if (detected === null) {
+          invalidImageIndices.push(idx)
+          continue
+        }
+        if (detected === 'internal') {
+          invalidImageIndices.push(idx)
+          continue
+        }
       }
     }
 

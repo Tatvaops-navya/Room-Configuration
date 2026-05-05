@@ -1,4 +1,4 @@
-/* Remove .next — fixes stale webpack chunks (e.g. Cannot find module './948.js'). */
+/* Remove .next — fixes stale webpack chunks (e.g. ./948.js, ./chunks/vendor-chunks/next.js). */
 const fs = require('fs')
 const path = require('path')
 const dir = path.join(__dirname, '..', '.next')

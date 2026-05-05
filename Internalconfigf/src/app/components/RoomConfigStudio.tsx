@@ -730,9 +730,6 @@ export function RoomConfigStudio({
                       : isHovered
                         ? 'inset 0 0 0 1px rgba(255,255,255,0.14), inset 0 1px 0 rgba(255,255,255,0.10), 0 28px 72px rgba(0,0,0,0.5), 0 0 40px rgba(255,255,255,0.06)'
                         : glassCardStyle.boxShadow,
-                    boxShadow:            isHovered
-                      ? 'inset 0 0 0 1px rgba(255,255,255,0.14), inset 0 1px 0 rgba(255,255,255,0.10), 0 28px 72px rgba(0,0,0,0.5), 0 0 40px rgba(255,255,255,0.06)'
-                      : glassCardStyle.boxShadow,
                   }}
                 >
                   <div style={{

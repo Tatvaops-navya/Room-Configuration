@@ -3320,59 +3320,124 @@ export function GenerationResults({
                 {renderGenerationHistoryCards()}
               </div>
             ) : customActiveTab === 'Erase' && eraseLeftTab === 'Objects' ? (
-              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', paddingBottom: '20px' }}>
-                {/* Capture Area Action - only if not locked */}
-                {!captureLocked && (
-                  <div
-                    onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
-                    onMouseEnter={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
-                    onMouseLeave={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
-                    style={{ margin: '16px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'capture' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'capture' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
-                  >
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Capture Area</div>
-                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Draw a selection to define the area to erase.</div>
-                    </div>
-                  </div>
-                )}
-                {isCustomComponentConfiguration && (
-                  <div
-                    onClick={() => setSelectedAction(selectedAction === 'erase-full-components' ? null : 'erase-full-components')}
-                    onMouseEnter={e => { if (selectedAction !== 'erase-full-components') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
-                    onMouseLeave={e => { if (selectedAction !== 'erase-full-components') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
-                    style={{ margin: '8px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'erase-full-components' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'erase-full-components' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
-                  >
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.7 3.3h10.6M4.2 3.3V2h7.6v1.3M5.3 3.3v9.2M8 3.3v9.2M10.7 3.3v9.2M3.4 3.3l.6 10.2h8l.6-10.2" stroke="rgba(255,255,255,0.55)" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Erase Full Components</div>
-                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Removes all furniture components in the room (sofas, mats, curtains, decor, etc.) while keeping the room structure.</div>
-                    </div>
-                  </div>
-                )}
-
-                {captureLocked && captureThumb && (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 16px', marginTop: 8 }}>
-                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', width: '100%', textAlign: 'left', padding: '12px 0 6px 0' }}>Selected area</div>
-                    <div style={{ width: 130, height: 130, borderRadius: 8, background: 'rgba(255,255,255,0.05)', border: '0.5px solid rgba(255,255,255,0.15)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <img src={captureThumb} alt="Selected area preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    </div>
-                    {capturePixelDims && (
-                      <div style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.55)', textAlign: 'center', marginTop: 8, fontFamily: "'Inter', sans-serif" }}>
-                        {capturePixelDims.w} × {capturePixelDims.h} px
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                  {/* Capture Area Action - only if not locked */}
+                  {!captureLocked && (
+                    <div
+                      onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
+                      onMouseEnter={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
+                      onMouseLeave={e => { if (selectedAction !== 'capture') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
+                      style={{ margin: '16px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'capture' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'capture' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
+                    >
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
                       </div>
-                    )}
-                  </div>
-                )}
-                {captureLocked && !captureThumb && (
-                  <div style={{ padding: '12px 16px', fontSize: 11, color: 'rgba(255,255,255,0.4)', fontFamily: "'Inter', sans-serif", lineHeight: 1.45 }}>
-                    Preview unavailable for this image source; the selection on the main image is still used for erase.
-                  </div>
-                )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Capture Area</div>
+                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Draw a selection to define the area to erase.</div>
+                      </div>
+                    </div>
+                  )}
+                  {isCustomComponentConfiguration && (
+                    <div
+                      onClick={() => setSelectedAction(selectedAction === 'erase-full-components' ? null : 'erase-full-components')}
+                      onMouseEnter={e => { if (selectedAction !== 'erase-full-components') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.08)'; }}
+                      onMouseLeave={e => { if (selectedAction !== 'erase-full-components') (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.04)'; }}
+                      style={{ margin: '8px 16px 8px', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: 10, background: selectedAction === 'erase-full-components' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)', border: selectedAction === 'erase-full-components' ? '0.5px solid rgba(255,255,255,0.3)' : '0.5px solid rgba(255,255,255,0.08)', cursor: 'pointer', transition: 'background 150ms ease, border-color 150ms ease' }}
+                    >
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.7 3.3h10.6M4.2 3.3V2h7.6v1.3M5.3 3.3v9.2M8 3.3v9.2M10.7 3.3v9.2M3.4 3.3l.6 10.2h8l.6-10.2" stroke="rgba(255,255,255,0.55)" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', fontFamily: "'Inter', sans-serif" }}>Erase Full Components</div>
+                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', lineHeight: 1.5, fontFamily: "'Inter', sans-serif", marginTop: 2 }}>Removes all furniture components in the room (sofas, mats, curtains, decor, etc.) while keeping the room structure.</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {captureLocked && captureThumb && (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 16px', marginTop: 8 }}>
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', width: '100%', textAlign: 'left', padding: '12px 0 6px 0' }}>Selected area</div>
+                      <div style={{ width: 130, height: 130, borderRadius: 8, background: 'rgba(255,255,255,0.05)', border: '0.5px solid rgba(255,255,255,0.15)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <img src={captureThumb} alt="Selected area preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      </div>
+                      {capturePixelDims && (
+                        <div style={{ fontSize: 11, fontWeight: 500, color: 'rgba(255,255,255,0.55)', textAlign: 'center', marginTop: 8, fontFamily: "'Inter', sans-serif" }}>
+                          {capturePixelDims.w} × {capturePixelDims.h} px
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {captureLocked && !captureThumb && (
+                    <div style={{ padding: '12px 16px', fontSize: 11, color: 'rgba(255,255,255,0.4)', fontFamily: "'Inter', sans-serif", lineHeight: 1.45 }}>
+                      Preview unavailable for this image source; the selection on the main image is still used for erase.
+                    </div>
+                  )}
+                </div>
+                <div
+                  style={{
+                    flexShrink: 0,
+                    padding: '12px 16px 14px',
+                    borderTop: '0.5px solid rgba(255,255,255,0.1)',
+                    background: 'linear-gradient(180deg, rgba(18,18,20,0.4) 0%, rgba(8,8,10,0.92) 100%)',
+                  }}
+                >
+                  {(() => {
+                    if (!canApplyErase && !(apiGenerating && apiGenerateKind === 'erase')) {
+                      let hint = '';
+                      if (externalGeneratePending) {
+                        hint = 'Wait until the room image finishes loading.';
+                      } else if (isCustomComponentConfiguration && selectedAction === 'erase-full-components') {
+                        hint = '';
+                      } else if (!captureLocked) {
+                        hint = isCustomComponentConfiguration
+                          ? 'Choose Capture Area, draw on the photo, confirm the box—or pick Erase Full Components—then Apply.'
+                          : 'Choose Capture Area, draw on the photo, then lock the selection before applying.';
+                      } else if (apiGenerating && apiGenerateKind !== 'erase') {
+                        hint = 'Wait until the current edit finishes.';
+                      }
+                      return hint ? (
+                        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.42)', lineHeight: 1.45, marginBottom: 10, fontFamily: "'Inter', sans-serif" }}>
+                          {hint}
+                        </div>
+                      ) : null;
+                    }
+                    return null;
+                  })()}
+                  <button
+                    type="button"
+                    disabled={!canApplyErase}
+                    onClick={() => void handleEraseApply()}
+                    style={{
+                      width: '100%',
+                      height: 42,
+                      borderRadius: 8,
+                      background: '#000000',
+                      border: '1.5px solid #FFFFFF',
+                      color: '#ffffff',
+                      fontSize: 13,
+                      fontWeight: 500,
+                      fontFamily: "'Inter', sans-serif",
+                      cursor: !canApplyErase ? 'not-allowed' : 'pointer',
+                      opacity: !canApplyErase ? 0.5 : 1,
+                      boxShadow: '0 2px 12px rgba(0,0,0,0.22)',
+                    }}
+                    onMouseEnter={e => {
+                      if (!canApplyErase) return;
+                      (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.12)';
+                    }}
+                    onMouseLeave={e => {
+                      (e.currentTarget as HTMLButtonElement).style.background = '#000000';
+                    }}
+                  >
+                    {apiGenerating && apiGenerateKind === 'erase'
+                      ? 'Erasing…'
+                      : selectedAction === 'erase-full-components'
+                        ? 'Apply full component erase'
+                        : 'Apply erase'}
+                  </button>
+                </div>
               </div>
             ) : customActiveTab === 'Edit' ? (
               <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -4491,7 +4556,10 @@ export function GenerationResults({
         style={{
           width:                showRightPanel ? (isMobile ? '82vw' : '259px') : '0px',
           flexShrink:           0,
-          height:               '100%',
+          // Mobile: do not set height: 100% with top+bottom — CSS ignores bottom when over-constrained,
+          // so the panel was extending under the z-[60] tab bar and hid "Confirm Customisation".
+          height:               isMobile ? undefined : '100%',
+          minHeight:            isMobile ? 0 : undefined,
           background:           'rgba(0,0,0,0.22)',
           borderRadius:         '16px',
           border:               showRightPanel ? '1px solid rgba(255,255,255,0.08)' : '0px solid transparent',
@@ -5493,7 +5561,7 @@ export function GenerationResults({
             </div>
           </div>
         ) : isCustomisation ? (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
             {/* Tab switcher */}
             <div style={{ padding: '12px 16px 0', borderBottom: '0.5px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'row' }}>
               {(['Style', 'Colour', 'Material'] as const).map(tab => {
@@ -5530,7 +5598,7 @@ export function GenerationResults({
               })}
             </div>
             {/* Content area */}
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
               {customPanelTab === 'Style' && selectedCategory ? (
                 <div style={{ fontFamily: "'Inter', sans-serif" }}>
                   <div style={{ padding: '12px 16px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
@@ -5713,7 +5781,7 @@ export function GenerationResults({
                 flexShrink: 0,
                 position: 'sticky',
                 bottom: 0,
-                zIndex: 4,
+                zIndex: isMobile ? 62 : 4,
                 background:
                   'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 28%, rgba(0,0,0,0.78) 100%)',
                 backdropFilter: isMobile ? 'blur(6px)' : undefined,

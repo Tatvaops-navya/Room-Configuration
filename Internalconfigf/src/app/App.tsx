@@ -1,4 +1,5 @@
 import UploadFloorPlan from "../imports/UploadFloorPlan";
+import { Toaster } from "sonner";
 import imgBg from "figma:asset/cbb61108720d04d2ff8d142ee51098e6c2f1f1ef.png";
 import { Component, type ReactNode } from "react";
 
@@ -37,6 +38,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 export default function App() {
   return (
     <ErrorBoundary>
+      <Toaster theme="dark" richColors position="top-center" />
       <div
         className="min-h-screen w-full flex items-start md:items-center justify-center overflow-auto"
         style={{ position: "relative" }}

@@ -1,11 +1,13 @@
-import { ArrowLeft, User, ArrowRight } from 'lucide-react';
+import { ArrowLeft, User, ArrowRight, Menu } from 'lucide-react';
 
 interface AppHeaderProps {
   onBack?: () => void;
   onNext?: () => void;
+  /** Mobile / compact flows: opens the same account drawer as the home hamburger. */
+  onMenu?: () => void;
 }
 
-export function AppHeader({ onBack, onNext }: AppHeaderProps) {
+export function AppHeader({ onBack, onNext, onMenu }: AppHeaderProps) {
   return (
     <div
       style={{
@@ -92,8 +94,30 @@ export function AppHeader({ onBack, onNext }: AppHeaderProps) {
         )}
       </div>
 
-      {/* ── Right: tatva:Ops logo + user avatar ── */}
+      {/* ── Right: menu (optional) + tatva:Ops logo + user avatar ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        {onMenu && (
+          <button
+            type="button"
+            onClick={onMenu}
+            aria-label="Open menu"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '40px',
+              height: '40px',
+              borderRadius: '12px',
+              border: '1px solid rgba(255,255,255,0.16)',
+              background: 'rgba(255,255,255,0.08)',
+              color: '#fff',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <Menu size={18} strokeWidth={2} />
+          </button>
+        )}
         <div style={{ display: 'flex', alignItems: 'baseline' }}>
           <span
             style={{

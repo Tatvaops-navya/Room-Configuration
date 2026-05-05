@@ -2,6 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { setSpaciaPhone } from '@/app/lib/auth/spaciaSession'
 
 function VerifyInner() {
   const params = useSearchParams()
@@ -39,7 +40,7 @@ function VerifyInner() {
     try {
       const tok = window.localStorage.getItem('spacia.token')?.trim()
       const otpOk = window.localStorage.getItem('spacia.otpVerified') === '1'
-      if (tok || otpOk) router.replace('/home')
+      if (tok || otpOk) router.replace('/auth/continue')
     } catch {
       /* ignore */
     }
@@ -119,8 +120,9 @@ function VerifyInner() {
         }
         if (token) window.localStorage.setItem('spacia.token', token);
         else window.localStorage.setItem('spacia.otpVerified', '1');
+        setSpaciaPhone(phone)
       }
-      router.push('/home')
+      router.replace('/auth/continue')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invalid OTP. Please try again.')
       setOtp(['', '', '', '', '', ''])

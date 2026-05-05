@@ -19,7 +19,7 @@ export default function SpaciaIntroPage() {
     try {
       const tok = window.localStorage.getItem('spacia.token')?.trim()
       const otpOk = window.localStorage.getItem('spacia.otpVerified') === '1'
-      if (tok || otpOk) router.replace('/home')
+      if (tok || otpOk) router.replace('/auth/continue')
     } catch {
       /* ignore */
     }

@@ -1,19 +1,73 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { isSpaciaSignedIn } from '@/app/lib/auth/spaciaSession'
+import { loadUserProfile } from '@/app/lib/userProfile/service'
 
 export default function HomePage() {
   const router = useRouter()
   const [token, setToken] = useState<string | null>(null)
+  const [ready, setReady] = useState(false)
+  const runIdRef = useRef(0)
 
   useEffect(() => {
-    try {
-      setToken(window.localStorage.getItem('spacia.token'))
-    } catch {
-      setToken(null)
-    }
-  }, [])
+    const runId = ++runIdRef.current
+    ;(async () => {
+      if (!isSpaciaSignedIn()) {
+        if (runIdRef.current !== runId) return
+        router.replace('/login')
+        return
+      }
+      try {
+        const profile = await loadUserProfile()
+        if (runIdRef.current !== runId) return
+        if (!profile.onboardingCompleted) {
+          router.replace('/onboarding/questions')
+          return
+        }
+      } catch {
+        if (runIdRef.current !== runId) return
+        router.replace('/onboarding/questions')
+        return
+      }
+      try {
+        setToken(window.localStorage.getItem('spacia.token'))
+      } catch {
+        setToken(null)
+      }
+      if (runIdRef.current !== runId) return
+      setReady(true)
+    })()
+  }, [router])
+
+  if (!ready) {
+    return (
+      <div
+        style={{
+          minHeight: '100dvh',
+          background: '#1a1510',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 999,
+            border: '3px solid rgba(255,255,255,0.12)',
+            borderTopColor: '#e8873a',
+            animation: 'homeSpin 0.75s linear infinite',
+          }}
+          aria-busy
+          aria-label="Loading"
+        />
+        <style>{`@keyframes homeSpin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
 
   return (
     <div style={{ minHeight: '100dvh', padding: 24 }}>
@@ -38,4 +92,3 @@ export default function HomePage() {
     </div>
   )
 }
-

@@ -6,8 +6,11 @@ import imgImage from "figma:asset/4e65f32928ec1c24c3d2480d067ce09ec48a2ae5.png";
 import { imgVector } from "./svg-ba9mt";
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { LayoutDashboard, Building2, Menu, X, Home, Trophy, FolderKanban, Sparkles, Images, Headset, Phone, Mail, MessageCircle, ChevronRight, ChevronDown, User, Settings, Gem, CreditCard, Gift, CircleHelp, Info, LogOut, ArrowLeft, ArrowRight, Bell, MoreVertical, MapPin, Lightbulb, Bookmark, Grid2x2, Plus, Camera, Tag, SlidersHorizontal, Trash2, Search, AtSign, Bot, BellRing, Eye, Moon, Languages, ExternalLink, HelpCircle, FileText, Shield, Funnel, Grid3x3, Upload } from 'lucide-react';
+import { LayoutDashboard, Building2, Menu, X, Home, Trophy, FolderKanban, Sparkles, Images, Headset, Phone, Mail, MessageCircle, ChevronRight, ChevronDown, User, Settings, Gem, CreditCard, Gift, CircleHelp, Info, LogOut, ArrowLeft, ArrowRight, Bell, MapPin, Lightbulb, Bookmark, Grid2x2, Plus, Camera, Tag, SlidersHorizontal, Trash2, Search, AtSign, Bot, BellRing, Eye, Moon, Languages, ExternalLink, HelpCircle, FileText, Shield, Funnel, Grid3x3, Upload } from 'lucide-react';
 import { RoomConfigStudio } from '../app/components/RoomConfigStudio';
+import { ContestScreen } from '../app/components/ContestScreen';
+import { BillingScreen } from '../app/components/BillingScreen';
+import { HelpCenterScreen } from '../app/components/HelpCenterScreen';
 import { DEFAULT_REGIONAL_STYLE_NAME } from '../app/components/regionalDesignStyles';
 import { AppHeader } from '../app/components/AppHeader';
 import { AppSidebar } from '../app/components/AppSidebar';
@@ -1425,7 +1428,10 @@ type AppNavView =
   | 'createPost'
   | 'followers'
   | 'settings'
-  | 'gallery';
+  | 'helpCenter'
+  | 'billing'
+  | 'gallery'
+  | 'contest';
 
 function getInitialNavView(): AppNavView {
   if (typeof window === 'undefined') return 'roomConfig';
@@ -1570,7 +1576,7 @@ export default function UploadFloorPlan() {
     { label: 'Profile / Account', Icon: User, active: currentView === 'profile', onClick: () => setCurrentView('profile') },
     { label: 'Settings', Icon: Settings, active: currentView === 'settings', onClick: () => setCurrentView('settings') },
     { label: 'Pricing / Plans', Icon: Gem },
-    { label: 'Billing', Icon: CreditCard },
+    { label: 'Billing', Icon: CreditCard, active: currentView === 'billing', onClick: () => setCurrentView('billing') },
     { label: 'Rewards', Icon: Gift },
     { label: 'Support', Icon: CircleHelp, onClick: () => setSupportModalOpen(true) },
   ] as const;
@@ -1770,6 +1776,7 @@ export default function UploadFloorPlan() {
     else if (p.startsWith('/home')) setCurrentView('home');
     else if (p.startsWith('/login')) setCurrentView('login');
     else if (p.startsWith('/verify')) setCurrentView('verify');
+    else if (p.startsWith('/contest')) setCurrentView('contest');
     // else: keep default
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1786,7 +1793,9 @@ export default function UploadFloorPlan() {
             ? '/login'
             : currentView === 'verify'
               ? '/verify'
-              : null;
+              : currentView === 'contest'
+                ? '/contest'
+                : null;
     if (!desired) return;
     try {
       if (window.location.pathname !== desired) {
@@ -1872,8 +1881,24 @@ export default function UploadFloorPlan() {
                   }}
                 />
 
+                {/* Top bar — same hamburger pattern as Home / Gallery */}
+                <div className="relative z-[2] px-4 pt-[max(env(safe-area-inset-top),12px)] pb-3">
+                  <div className="flex items-center justify-between">
+                    <img alt="" src={imgImage} className="h-10 w-10 object-contain mix-blend-screen" loading="lazy" />
+                    <p className="text-[15px] font-semibold tracking-[0.2px] text-white/95">Imagine</p>
+                    <button
+                      type="button"
+                      onClick={() => setIsMobileNavOpen((v) => !v)}
+                      className="flex h-11 w-11 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                      aria-label="Toggle menu"
+                    >
+                      {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+                    </button>
+                  </div>
+                </div>
+
                 {/* content */}
-                <div className="relative z-[1] mx-auto w-full max-w-[420px] px-4 pt-[84px] pb-[120px]">
+                <div className="relative z-[1] mx-auto w-full max-w-[420px] px-4 pt-6 pb-[120px]">
                   <div className="text-center text-[12px] font-semibold tracking-[0.22em] text-white/60">
                     {/* keep layout like reference; subtitle intentionally blank */}
                   </div>
@@ -2016,8 +2041,16 @@ export default function UploadFloorPlan() {
                 </div>
 
                 <div className="relative z-10 flex min-h-screen flex-col px-5 pt-[max(env(safe-area-inset-top),16px)] pb-[max(env(safe-area-inset-bottom),16px)]">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="text-[22px] font-bold tracking-[-0.2px] text-white/90">Vision</div>
+                    <button
+                      type="button"
+                      onClick={() => setIsMobileNavOpen((v) => !v)}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                      aria-label="Toggle menu"
+                    >
+                      {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+                    </button>
                   </div>
 
                   <div className="mt-auto w-full max-w-[420px]">
@@ -2128,102 +2161,6 @@ export default function UploadFloorPlan() {
                   </button>
                 </div>
               </div>
-
-              {/* Mobile drawer overlay (same behavior as Imagine) */}
-              <AnimatePresence>
-                {isMobileNavOpen && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2, ease: 'easeOut' }}
-                    className="absolute inset-0 z-[60]"
-                  >
-                    <button
-                      type="button"
-                      className="absolute inset-0 bg-[rgba(0,0,0,0.52)] backdrop-blur-[4px]"
-                      onClick={() => setIsMobileNavOpen(false)}
-                      aria-label="Close menu backdrop"
-                    />
-                    <motion.aside
-                      initial={{ x: '100%' }}
-                      animate={{ x: 0 }}
-                      exit={{ x: '100%' }}
-                      transition={{ duration: 0.26, ease: 'easeOut' }}
-                      className="absolute right-0 top-0 bottom-[calc(74px+env(safe-area-inset-bottom))] flex w-[82%] max-w-[350px] flex-col rounded-l-[20px] border-l border-[rgba(255,255,255,0.13)] bg-[rgba(12,12,12,0.92)] px-4 py-5 shadow-[0_0_50px_rgba(0,0,0,0.6)] backdrop-blur-[16px]"
-                    >
-                      <div className="mb-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-14 w-14 items-center justify-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[linear-gradient(145deg,#262626,#161616)] text-white/90">
-                            <User size={22} />
-                          </div>
-                          <div>
-                            <p className="text-[22px] leading-[1.05] font-semibold tracking-[-0.2px] text-white">Madhunala</p>
-                            <p className="text-[22px] leading-[1.05] font-semibold tracking-[-0.2px] text-white">Navya</p>
-                            <p className="mt-1 text-[10px] font-semibold tracking-[2.4px] text-white/55 uppercase">Premium Member</p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setIsMobileNavOpen(false)}
-                          className="flex h-9 w-9 items-center justify-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.05)] text-white/80"
-                          aria-label="Close menu"
-                        >
-                          <X size={17} />
-                        </button>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsMobileNavOpen(false);
-                          setCurrentView('profile');
-                        }}
-                        className="mb-4 inline-flex w-fit items-center gap-2 text-[16px] text-white/65 transition-colors duration-200 hover:text-white"
-                      >
-                        View Profile
-                        <ChevronRight size={15} />
-                      </button>
-
-                      <div className="mb-4 h-px bg-white/10" />
-
-                      <nav className="flex flex-1 flex-col gap-2 overflow-y-auto pb-2">
-                        {mobileDrawerItems.map(({ label, Icon, active, onClick }) => (
-                          <button
-                            key={label}
-                            type="button"
-                            onClick={() => {
-                              setIsMobileNavOpen(false);
-                              onClick?.();
-                            }}
-                            className={`flex h-[54px] w-full items-center gap-3 rounded-xl border px-4 text-left transition-all duration-200 ${
-                              active
-                                ? 'border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.14)] text-white'
-                                : 'border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.06)] text-white/55 hover:bg-[rgba(255,255,255,0.12)] hover:text-white'
-                            }`}
-                          >
-                            <Icon size={17} />
-                            <span className="text-[16px] font-medium">{label}</span>
-                          </button>
-                        ))}
-                      </nav>
-
-                      <div className="mt-3 mb-1 h-px bg-[rgba(255,255,255,0.08)]" />
-
-                      <div className="mt-auto rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.02)] p-2">
-                        <button
-                          type="button"
-                          onClick={logout}
-                          className="flex h-[54px] w-full items-center gap-3 rounded-xl border border-[rgba(239,68,68,0.36)] bg-[linear-gradient(90deg,rgba(127,29,29,0.42)_0%,rgba(127,29,29,0.28)_100%)] px-4 text-[16px] font-medium text-[#f87171]"
-                        >
-                          <LogOut size={17} />
-                          Logout
-                        </button>
-                      </div>
-                    </motion.aside>
-                  </motion.div>
-                )}
-              </AnimatePresence>
 
               <main className="px-4 pb-28 pt-4">
                 {/* Scrollable Tabs */}
@@ -2396,8 +2333,13 @@ export default function UploadFloorPlan() {
                   <button type="button" className="rounded-full p-1.5 text-white/85 transition-colors duration-200 hover:bg-white/10" aria-label="Notifications">
                     <Bell size={16} />
                   </button>
-                  <button type="button" className="rounded-full p-1.5 text-white/85 transition-colors duration-200 hover:bg-white/10" aria-label="More">
-                    <MoreVertical size={16} />
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileNavOpen((v) => !v)}
+                    className="flex h-10 w-10 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                    aria-label="Toggle menu"
+                  >
+                    {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
                   </button>
                 </div>
               </header>
@@ -2554,16 +2496,26 @@ export default function UploadFloorPlan() {
                   Cancel
                 </button>
                 <h1 className="text-[19px] font-semibold tracking-[-0.2px] text-white">New Post</h1>
-                <button
-                  type="button"
-                  disabled={!createPostImages.length}
-                  onClick={handleCreatePostSubmit}
-                  className={`text-[14px] font-semibold transition-colors duration-200 ${
-                    createPostImages.length ? 'text-white' : 'cursor-not-allowed text-white/35'
-                  }`}
-                >
-                  Post
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileNavOpen((v) => !v)}
+                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                    aria-label="Toggle menu"
+                  >
+                    {isMobileNavOpen ? <X size={17} /> : <Menu size={17} />}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!createPostImages.length}
+                    onClick={handleCreatePostSubmit}
+                    className={`text-[14px] font-semibold transition-colors duration-200 ${
+                      createPostImages.length ? 'text-white' : 'cursor-not-allowed text-white/35'
+                    }`}
+                  >
+                    Post
+                  </button>
+                </div>
               </header>
 
               <main className="mx-auto w-full max-w-[430px] space-y-4 px-4 pt-4">
@@ -2688,8 +2640,13 @@ export default function UploadFloorPlan() {
                   </button>
                   <h1 className="text-[22px] font-semibold tracking-[-0.2px] text-white">Followers</h1>
                 </div>
-                <button type="button" className="rounded-full p-1.5 text-white/85 transition-colors duration-200 hover:bg-white/10" aria-label="More">
-                  <MoreVertical size={16} />
+                <button
+                  type="button"
+                  onClick={() => setIsMobileNavOpen((v) => !v)}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                  aria-label="Toggle menu"
+                >
+                  {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
                 </button>
               </header>
 
@@ -2799,9 +2756,14 @@ export default function UploadFloorPlan() {
                   </button>
                   <h1 className="text-[18px] font-semibold tracking-[-0.2px] text-white">Settings</h1>
                 </div>
-                <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.06)] text-white/90">
-                  <User size={15} />
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileNavOpen((v) => !v)}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                  aria-label="Toggle menu"
+                >
+                  {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+                </button>
               </header>
 
               <main className="mx-auto w-full max-w-[430px] space-y-4 px-4 py-4">
@@ -2959,12 +2921,26 @@ export default function UploadFloorPlan() {
                 <section className="space-y-2">
                   <h2 className="px-1 text-[10px] font-semibold tracking-[0.08em] text-white/55 uppercase">Support & Legal</h2>
                   <div className="overflow-hidden rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.05)]">
-                    <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/5">
-                      <div className="flex items-center gap-3"><HelpCircle size={15} className="text-white/85" /><p className="text-[13px] text-white">Contact Support</p></div>
+                    <button
+                      type="button"
+                      onClick={() => setSupportModalOpen(true)}
+                      className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/5"
+                    >
+                      <div className="flex items-center gap-3">
+                        <HelpCircle size={15} className="text-white/85" />
+                        <p className="text-[13px] text-white">Contact Support</p>
+                      </div>
                       <ExternalLink size={15} className="text-white/35" />
                     </button>
-                    <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
-                      <div className="flex items-center gap-3"><FileText size={15} className="text-white/85" /><p className="text-[13px] text-white">FAQ</p></div>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentView('helpCenter')}
+                      className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5"
+                    >
+                      <div className="flex items-center gap-3">
+                        <FileText size={15} className="text-white/85" />
+                        <p className="text-[13px] text-white">FAQ</p>
+                      </div>
                       <ChevronRight size={15} className="text-white/35" />
                     </button>
                     <button type="button" className="flex w-full items-center justify-between border-t border-[rgba(255,255,255,0.06)] px-4 py-3 text-left hover:bg-white/5">
@@ -2998,6 +2974,50 @@ export default function UploadFloorPlan() {
           </motion.div>
         )}
 
+        {/* ── HELP CENTER / FAQ (from Settings) ─────────────────────────────── */}
+        {currentView === 'helpCenter' && (
+          <motion.div
+            key="helpCenter"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 z-[15] flex min-h-0 flex-col overflow-hidden bg-[#0f0d0b]"
+          >
+            <HelpCenterScreen
+              onBack={() => setCurrentView('settings')}
+              onToggleMenu={() => setIsMobileNavOpen((v) => !v)}
+              menuOpen={isMobileNavOpen}
+              onContactSupport={() => {
+                setIsMobileNavOpen(false);
+                setSupportModalOpen(true);
+              }}
+            />
+          </motion.div>
+        )}
+
+        {/* ── BILLING & INVOICES (from drawer → Billing) ─────────────────────── */}
+        {currentView === 'billing' && (
+          <motion.div
+            key="billing"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 z-[15] flex min-h-0 flex-col overflow-hidden"
+          >
+            <BillingScreen
+              onBack={() => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')}
+              onToggleMenu={() => setIsMobileNavOpen((v) => !v)}
+              menuOpen={isMobileNavOpen}
+              onContactSupport={() => {
+                setIsMobileNavOpen(false);
+                setSupportModalOpen(true);
+              }}
+            />
+          </motion.div>
+        )}
+
         {/* ── GALLERY VIEW (mobile) ─────────────────────────────────────────── */}
         {currentView === 'gallery' && (
           <motion.div
@@ -3023,8 +3043,13 @@ export default function UploadFloorPlan() {
                     <h1 className="text-[30px] leading-none font-semibold text-[#f5f7fb]">Gallery</h1>
                     <p className="mt-1 text-[12px] text-[#b8c0cc]">Explore beautiful spaces for inspiration</p>
                   </div>
-                  <button type="button" className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-[rgba(255,255,255,0.05)] text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-                    <Menu size={18} />
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileNavOpen((v) => !v)}
+                    className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/12 bg-[rgba(255,255,255,0.05)] text-white/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                    aria-label="Toggle menu"
+                  >
+                    {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
                   </button>
                 </header>
 
@@ -3287,6 +3312,25 @@ export default function UploadFloorPlan() {
           </motion.div>
         )}
 
+        {/* ── CONTEST VIEW (mobile) ─────────────────────────────────────────── */}
+        {currentView === 'contest' && (
+          <motion.div
+            key="contest"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 14 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="absolute inset-0 z-[15] overflow-hidden bg-[#0B0B0D]"
+          >
+            <div className="relative h-full w-full overflow-y-auto">
+              <ContestScreen
+                onBack={() => setCurrentView('home')}
+                onOpenMenu={() => setIsMobileNavOpen(true)}
+              />
+            </div>
+          </motion.div>
+        )}
+
         {/* ── ROOM CONFIG STUDIO VIEW ──────────────────────────────────────── */}
         {currentView === 'roomConfig' && (
           <motion.div
@@ -3342,7 +3386,17 @@ export default function UploadFloorPlan() {
                 if (preview) setSelectedImageUrl(preview);
                 setReturnToPreferences(false);
                 setImageGenKey((k) => k + 1);
-                setCurrentView('results');
+
+                /* Custom Room Components (arrangement): land on customise with reference image + Edit/Add/Replace/Erase.
+                   Full-room (purpose): show generation results first, then Finalize → customise. */
+                const arrangementFlow = payload.configMode === 'arrangement';
+                if (arrangementFlow) {
+                  setCustomActiveTab('Edit');
+                  setCurrentView('customisation');
+                } else {
+                  setCustomActiveTab(null);
+                  setCurrentView('results');
+                }
 
                 const arrangementEmptyPrefs =
                   payload.configMode === 'arrangement' &&
@@ -3426,6 +3480,7 @@ export default function UploadFloorPlan() {
                 onRegenerate={() => setImageGenKey((k) => k + 1)}
                 onFinalize={() => {
                   suppressWizardInitialGenResultRef.current = true;
+                  setCustomActiveTab((prev) => prev ?? 'Edit');
                   setCurrentView('customisation');
                 }}
                 onUndo={handleUndoGeneration}
@@ -3468,8 +3523,9 @@ export default function UploadFloorPlan() {
                 generationHistoryRaw={generationHistoryRaw}
                 onGenerationHistoryAppend={appendGenerationHistory}
                 serverWarningOnLoad={wizardServerWarning}
-                externalGeneratePending={false}
-                externalGenerateError={null}
+                externalGeneratePending={wizardApiPending}
+                externalGenerateScanSuppressed={wizardSuppressInitialScan}
+                externalGenerateError={wizardApiError}
                 imageGenKey={imageGenKey}
                 onRegenerate={() => setImageGenKey((k) => k + 1)}
                 isCustomisation
@@ -3486,6 +3542,111 @@ export default function UploadFloorPlan() {
         )}
 
       </AnimatePresence>
+
+      {/* Global hamburger drawer — mobile everywhere; also billing on wider viewports */}
+      {(isMobileHome || currentView === 'billing') && (
+        <AnimatePresence>
+          {isMobileNavOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="fixed inset-0 z-[110]"
+            >
+              <button
+                type="button"
+                className="absolute inset-0 bg-[rgba(0,0,0,0.52)] backdrop-blur-[4px]"
+                onClick={() => setIsMobileNavOpen(false)}
+                aria-label="Close menu backdrop"
+              />
+              <motion.aside
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ duration: 0.26, ease: 'easeOut' }}
+                className={`absolute right-0 top-0 flex w-[82%] max-w-[350px] flex-col rounded-l-[20px] border-l border-[rgba(255,255,255,0.13)] bg-[rgba(12,12,12,0.92)] px-4 py-5 shadow-[0_0_50px_rgba(0,0,0,0.6)] backdrop-blur-[16px] ${
+                  ['landing', 'login', 'verify'].includes(currentView) ||
+                  (currentView === 'billing' && !isMobileHome)
+                    ? 'bottom-0'
+                    : 'bottom-[calc(74px+env(safe-area-inset-bottom))]'
+                }`}
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-full border border-[rgba(255,255,255,0.14)] bg-[linear-gradient(145deg,#262626,#161616)] text-white/90">
+                      <User size={22} />
+                    </div>
+                    <div>
+                      <p className="text-[22px] leading-[1.05] font-semibold tracking-[-0.2px] text-white">Madhunala</p>
+                      <p className="text-[22px] leading-[1.05] font-semibold tracking-[-0.2px] text-white">Navya</p>
+                      <p className="mt-1 text-[10px] font-semibold tracking-[2.4px] text-white/55 uppercase">Premium Member</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileNavOpen(false)}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.05)] text-white/80"
+                    aria-label="Close menu"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileNavOpen(false);
+                    setCurrentView('profile');
+                  }}
+                  className="mb-4 inline-flex w-fit items-center gap-2 text-[16px] text-white/65 transition-colors duration-200 hover:text-white"
+                >
+                  View Profile
+                  <ChevronRight size={15} />
+                </button>
+
+                <div className="mb-4 h-px bg-white/10" />
+
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1">
+                    {mobileDrawerItems.map(({ label, Icon, active, onClick }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => {
+                          setIsMobileNavOpen(false);
+                          onClick?.();
+                        }}
+                        className={`flex h-[54px] w-full shrink-0 items-center gap-3 rounded-xl border px-4 text-left transition-all duration-200 ${
+                          active
+                            ? 'border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.14)] text-white'
+                            : 'border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.06)] text-white/55 hover:bg-[rgba(255,255,255,0.12)] hover:text-white'
+                        }`}
+                      >
+                        <Icon size={17} />
+                        <span className="text-[16px] font-medium">{label}</span>
+                      </button>
+                    ))}
+                  </nav>
+
+                  <div className="mt-5 shrink-0 border-t border-[rgba(255,255,255,0.08)] pt-5 pb-1">
+                    <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.02)] p-2">
+                      <button
+                        type="button"
+                        onClick={logout}
+                        className="flex h-[54px] w-full items-center gap-3 rounded-xl border border-[rgba(239,68,68,0.36)] bg-[linear-gradient(90deg,rgba(127,29,29,0.42)_0%,rgba(127,29,29,0.28)_100%)] px-4 text-[16px] font-medium text-[#f87171]"
+                      >
+                        <LogOut size={17} />
+                        Logout
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.aside>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
 
       {/*
         ── BLUR OVERLAY ──────────────────────────────────────────────────────────
@@ -3508,7 +3669,7 @@ export default function UploadFloorPlan() {
       )}
 
       {/* ── GLOBAL SHELL — header + sidebar, always on top, never animated ── */}
-      {!(isMobileHome && (currentView === 'landing' || currentView === 'home' || currentView === 'login' || currentView === 'verify' || currentView === 'profile' || currentView === 'createPost' || currentView === 'followers' || currentView === 'settings' || currentView === 'gallery')) && (
+      {!(isMobileHome && (currentView === 'landing' || currentView === 'home' || currentView === 'login' || currentView === 'verify' || currentView === 'profile' || currentView === 'createPost' || currentView === 'followers' || currentView === 'settings' || currentView === 'helpCenter' || currentView === 'billing' || currentView === 'gallery' || currentView === 'contest')) && (
         <AppHeader
           onBack={
             currentView === 'roomConfig' && backStepHandler
@@ -3524,16 +3685,23 @@ export default function UploadFloorPlan() {
                 }
               : currentView === 'customisation'
               ? () => setCurrentView('results')
+              : currentView === 'billing'
+              ? () => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')
               : undefined
           }
           onNext={nextStepHandler || undefined}
+          onMenu={
+            isMobileHome && ['roomConfig', 'results', 'customisation'].includes(currentView)
+              ? () => setIsMobileNavOpen(true)
+              : undefined
+          }
         />
       )}
       {!isMobileHome && <AppSidebar />}
 
       {isMobileHome && !(['landing','login','verify'].includes(currentView)) && (
-        <div className="fixed bottom-0 left-0 right-0 z-[60] border-t border-[rgba(255,255,255,0.12)] bg-[rgba(12,12,12,0.9)] px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2 backdrop-blur-[14px]">
-          <div className="grid grid-cols-5 gap-1">
+        <div className="fixed bottom-0 left-0 right-0 z-[60] border-t border-white/[0.1] bg-[rgba(10,10,12,0.92)] pb-[max(env(safe-area-inset-bottom),10px)] pt-2.5 shadow-[0_-12px_40px_rgba(0,0,0,0.45)] backdrop-blur-[18px]">
+          <div className="mx-auto grid max-w-[430px] grid-cols-5 gap-0.5 px-3">
             {[
               { label: 'Home', Icon: Home, active: currentView === 'home', onClick: () => setCurrentView('home') },
               { label: 'Projects', Icon: FolderKanban, active: false, onClick: () => {} },
@@ -3544,22 +3712,24 @@ export default function UploadFloorPlan() {
                 onClick: () => setCurrentView('imagineStart'),
               },
               { label: 'Gallery', Icon: Images, active: currentView === 'gallery', onClick: () => setCurrentView('gallery') },
-              { label: 'Contest', Icon: Trophy, active: false, onClick: () => {} },
+              { label: 'Contest', Icon: Trophy, active: currentView === 'contest', onClick: () => setCurrentView('contest') },
             ].map(({ label, Icon, active, onClick }) => (
               <button
                 key={label}
                 type="button"
                 onClick={onClick}
-                className={`flex min-h-[52px] flex-col items-center justify-center rounded-lg ${
+                className={`flex min-h-[54px] flex-col items-center justify-center gap-1 rounded-[12px] px-0.5 transition-colors ${
                   active
-                    ? label === 'Gallery'
-                      ? 'bg-[rgba(232,172,91,0.16)] text-[#f2c27d] border border-[rgba(232,172,91,0.45)]'
-                      : 'bg-[rgba(255,255,255,0.14)] text-white'
-                    : 'text-white/75'
+                    ? label === 'Gallery' || label === 'Contest'
+                      ? 'border border-[rgba(251,146,60,0.35)] bg-[rgba(251,146,60,0.1)] text-[#fdba74]'
+                      : label === 'Imagine'
+                        ? 'border border-[rgba(251,146,60,0.22)] bg-[rgba(251,146,60,0.08)] text-[#fed7aa]'
+                        : 'border border-white/[0.08] bg-white/[0.08] text-white'
+                    : 'border border-transparent text-white/[0.55] hover:bg-white/[0.04] hover:text-white/80'
                 }`}
               >
-                <Icon size={18} />
-                <span className="mt-1 text-[11px]">{label}</span>
+                <Icon size={label === 'Imagine' ? 19 : 18} strokeWidth={active ? 2.25 : 2} className={active ? '' : 'opacity-90'} />
+                <span className="text-[10px] font-semibold leading-none tracking-wide">{label}</span>
               </button>
             ))}
           </div>
@@ -3589,15 +3759,25 @@ export default function UploadFloorPlan() {
           </div>
 
           <div className="relative z-10 flex flex-col min-h-screen px-5 pt-[max(env(safe-area-inset-top),16px)] pb-[max(env(safe-area-inset-bottom),16px)] max-w-[460px] mx-auto">
-            <header className="flex w-full items-center justify-start mb-10">
+            <header className={`mb-10 flex w-full items-center ${isMobileHome ? 'justify-between' : 'justify-start'}`}>
               <button
                 type="button"
                 aria-label="Close"
                 onClick={() => setCurrentView(isSpaciaLoggedIn() ? 'home' : 'landing')}
-                className="w-[42px] h-[42px] rounded-full bg-white/[0.07] border border-white/[0.10] flex items-center justify-center hover:bg-white/[0.12] transition-colors backdrop-blur-[16px]"
+                className="flex h-[42px] w-[42px] items-center justify-center rounded-full border border-white/[0.10] bg-white/[0.07] backdrop-blur-[16px] transition-colors hover:bg-white/[0.12]"
               >
                 <X size={18} />
               </button>
+              {isMobileHome ? (
+                <button
+                  type="button"
+                  onClick={() => setIsMobileNavOpen((v) => !v)}
+                  className="flex h-11 w-11 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                  aria-label="Toggle menu"
+                >
+                  {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+                </button>
+              ) : null}
             </header>
 
             <div className="flex flex-col items-center justify-center mb-8">
@@ -3732,15 +3912,27 @@ export default function UploadFloorPlan() {
           </div>
 
           <div className="relative z-10 flex flex-col min-h-screen px-5 pt-[max(env(safe-area-inset-top),16px)] pb-[max(env(safe-area-inset-bottom),16px)] max-w-[460px] mx-auto">
-            <button
-              type="button"
-              onClick={() => setCurrentView('login')}
-              className="w-[42px] h-[42px] rounded-full bg-white/5 border border-white/10 flex items-center justify-center backdrop-blur-md active:scale-95 transition-transform"
-              aria-label="Go back"
-              disabled={spaciaVerifyLoading}
-            >
-              <ArrowLeft size={18} />
-            </button>
+            <div className={`flex w-full items-center ${isMobileHome ? 'justify-between' : 'justify-start'}`}>
+              <button
+                type="button"
+                onClick={() => setCurrentView('login')}
+                className="flex h-[42px] w-[42px] items-center justify-center rounded-full border border-white/10 bg-white/5 backdrop-blur-md transition-transform active:scale-95"
+                aria-label="Go back"
+                disabled={spaciaVerifyLoading}
+              >
+                <ArrowLeft size={18} />
+              </button>
+              {isMobileHome ? (
+                <button
+                  type="button"
+                  onClick={() => setIsMobileNavOpen((v) => !v)}
+                  className="flex h-11 w-11 items-center justify-center rounded-xl border border-[rgba(255,255,255,0.16)] bg-[rgba(255,255,255,0.08)] text-white"
+                  aria-label="Toggle menu"
+                >
+                  {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+                </button>
+              ) : null}
+            </div>
 
             <div className="flex flex-col items-center mt-8 mb-5">
               <div className="w-[50px] h-[50px] rounded-[14px] bg-[#E8873A] grid grid-cols-2 gap-1 p-2.5 shadow-lg shadow-black/20">
@@ -3911,7 +4103,7 @@ export default function UploadFloorPlan() {
         </motion.div>
       )}
 
-      {!(isMobileHome && (isMobileNavOpen || currentView === 'profile' || currentView === 'createPost' || currentView === 'followers' || currentView === 'settings' || currentView === 'gallery')) && (
+      {!(isMobileHome && (isMobileNavOpen || currentView === 'profile' || currentView === 'createPost' || currentView === 'followers' || currentView === 'settings' || currentView === 'helpCenter' || currentView === 'billing' || currentView === 'gallery' || currentView === 'contest')) && (
         <div
           style={{
             position: 'fixed',
