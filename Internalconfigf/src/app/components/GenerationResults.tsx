@@ -203,6 +203,144 @@ function capturePercentRectToEraseRegion(
   return { x: x1, y: y1, width, height };
 }
 
+async function maskedMeanAbsDiff(
+  beforeDataUrl: string,
+  afterDataUrl: string,
+  maskDataUrl: string
+): Promise<number | null> {
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = src;
+    });
+
+  try {
+    const [beforeImg, afterImg, maskImg] = await Promise.all([
+      loadImage(beforeDataUrl),
+      loadImage(afterDataUrl),
+      loadImage(maskDataUrl),
+    ]);
+    const w = beforeImg.naturalWidth;
+    const h = beforeImg.naturalHeight;
+    if (!w || !h) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(beforeImg, 0, 0, w, h);
+    const before = ctx.getImageData(0, 0, w, h).data;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(afterImg, 0, 0, w, h);
+    const after = ctx.getImageData(0, 0, w, h).data;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(maskImg, 0, 0, w, h);
+    const mask = ctx.getImageData(0, 0, w, h).data;
+
+    let total = 0;
+    let count = 0;
+    for (let i = 0; i < before.length; i += 4) {
+      const ml = (mask[i] + mask[i + 1] + mask[i + 2]) / 3;
+      if (ml < 200) continue;
+      total +=
+        Math.abs(before[i] - after[i]) +
+        Math.abs(before[i + 1] - after[i + 1]) +
+        Math.abs(before[i + 2] - after[i + 2]);
+      count++;
+    }
+    if (count === 0) return null;
+    return total / (count * 3);
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeMaskedEditResult(
+  beforeDataUrl: string,
+  afterDataUrl: string,
+  maskDataUrl: string
+): Promise<{ meanDiff: number; changedRatio: number; whiteRatio: number; variance: number } | null> {
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = src;
+    });
+
+  try {
+    const [beforeImg, afterImg, maskImg] = await Promise.all([
+      loadImage(beforeDataUrl),
+      loadImage(afterDataUrl),
+      loadImage(maskDataUrl),
+    ]);
+    const w = beforeImg.naturalWidth;
+    const h = beforeImg.naturalHeight;
+    if (!w || !h) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(beforeImg, 0, 0, w, h);
+    const before = ctx.getImageData(0, 0, w, h).data;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(afterImg, 0, 0, w, h);
+    const after = ctx.getImageData(0, 0, w, h).data;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(maskImg, 0, 0, w, h);
+    const mask = ctx.getImageData(0, 0, w, h).data;
+
+    let count = 0;
+    let diffTotal = 0;
+    let changed = 0;
+    let whitePixels = 0;
+    let lumaSum = 0;
+    let lumaSqSum = 0;
+    for (let i = 0; i < before.length; i += 4) {
+      const ml = (mask[i] + mask[i + 1] + mask[i + 2]) / 3;
+      if (ml < 200) continue;
+      count++;
+      const dr = Math.abs(before[i] - after[i]);
+      const dg = Math.abs(before[i + 1] - after[i + 1]);
+      const db = Math.abs(before[i + 2] - after[i + 2]);
+      const d = (dr + dg + db) / 3;
+      diffTotal += d;
+      if (d >= 18) changed++;
+      const ar = after[i];
+      const ag = after[i + 1];
+      const ab = after[i + 2];
+      if (ar >= 230 && ag >= 230 && ab >= 230) whitePixels++;
+      const luma = (ar + ag + ab) / 3;
+      lumaSum += luma;
+      lumaSqSum += luma * luma;
+    }
+    if (count === 0) return null;
+    const meanDiff = diffTotal / count;
+    const changedRatio = changed / count;
+    const whiteRatio = whitePixels / count;
+    const meanLuma = lumaSum / count;
+    const variance = Math.max(0, lumaSqSum / count - meanLuma * meanLuma);
+    return { meanDiff, changedRatio, whiteRatio, variance };
+  } catch {
+    return null;
+  }
+}
+
 const STRICT_PROMPT_OBJECT_RULES = [
   'STRICT PROMPT LOCK: Generate ONLY the exact object described by the user prompt.',
   'Do NOT change, reinterpret, or substitute any explicitly mentioned attribute.',
@@ -284,7 +422,7 @@ export function GenerationResults({
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
   const [mobileRightPanelOpen, setMobileRightPanelOpen] = useState(false);
   const [activeTab,        setActiveTab]        = useState<'color' | 'style'>('color');
-  const [selectedPalette,  setSelectedPalette]  = useState<string | null>(null);
+  const [selectedColor,    setSelectedColor]    = useState<string | null>(null);
   const [selectedStyle,    setSelectedStyle]    = useState<string>('Modern');
   const [strictLayoutLockEnabled, setStrictLayoutLockEnabled] = useState(true);
   const [selectedColorDots, setSelectedColorDots] = useState<string[] | null>(null);
@@ -1056,6 +1194,8 @@ export function GenerationResults({
   const [apiError, setApiError] = useState<string | null>(null);
   const [apiWarning, setApiWarning] = useState<string | null>(null);
   const [mobileFinalizeDismissed, setMobileFinalizeDismissed] = useState(false);
+  const lastAppliedStyleRef = useRef<string>('');
+  const lastAppliedPaletteRef = useRef<string | null>(null);
 
   useEffect(() => {
     const w = serverWarningOnLoad?.trim();
@@ -1070,6 +1210,7 @@ export function GenerationResults({
 
   const roomImageBusy = !!(externalGeneratePending || apiGenerating);
   const isCustomComponentConfiguration = roomSession?.configMode === 'arrangement';
+  const showStyleBadge = !isCustomComponentConfiguration;
   /** Custom components (arrangement): Finalize works without sidebar style/color and while wizard gen runs. */
   const finalizeDisabled =
     !roomSession ||
@@ -1103,9 +1244,15 @@ export function GenerationResults({
 
   useEffect(() => {
     if (!roomSession) return;
-    setSelectedStyle(roomSession.style || DEFAULT_REGIONAL_STYLE_NAME);
+    const styleForSession =
+      roomSession.configMode === 'arrangement'
+        ? ''
+        : roomSession.style || DEFAULT_REGIONAL_STYLE_NAME;
+    setSelectedStyle(styleForSession);
     const p = roomSession.paletteName;
-    setSelectedPalette(p);
+    setSelectedColor(p);
+    lastAppliedStyleRef.current = styleForSession;
+    lastAppliedPaletteRef.current = p;
     if (p) {
       const dots = COLOR_PALETTES.find((c) => c.name === p)?.dots;
       if (dots) setSelectedColorDots(dots);
@@ -1160,7 +1307,7 @@ export function GenerationResults({
 
   const runGenerate = useCallback(
     async (
-      opts?: { shuffle?: boolean; useCurrentResult?: boolean; silent?: boolean },
+      opts?: { shuffle?: boolean; useCurrentResult?: boolean; silent?: boolean; forceStyleOnly?: boolean },
       kind?: 'regen' | 'finalize'
     ) => {
       if (!roomSession) {
@@ -1183,10 +1330,11 @@ export function GenerationResults({
         setApiWarning(null);
       }
       try {
-        const data = await postRoomGenerate(roomSession, selectedStyle, selectedPalette, {
+        const data = await postRoomGenerate(roomSession, selectedStyle, selectedColor, {
           shuffle: opts?.shuffle,
           currentResultImage: useCur ? apiResultImageUrl || undefined : undefined,
           strictLayoutLock: strictLayoutLockEnabled,
+          forceStyleOnly: opts?.forceStyleOnly,
         });
         if (data.error) {
           if (mountedRef.current) setApiError(data.error);
@@ -1202,6 +1350,8 @@ export function GenerationResults({
         const wm = await applyWatermarkToImage(data.imageUrl);
         onGeneratedImage?.(wm, data.imageUrl);
         onGenerationHistoryAppend?.(wm, data.imageUrl);
+        lastAppliedStyleRef.current = selectedStyle;
+        lastAppliedPaletteRef.current = selectedColor;
         return true;
       } catch (e) {
         if (mountedRef.current) {
@@ -1218,7 +1368,7 @@ export function GenerationResults({
     [
       roomSession,
       selectedStyle,
-      selectedPalette,
+      selectedColor,
       strictLayoutLockEnabled,
       generatedImageUrl,
       apiResultImageUrl,
@@ -1232,8 +1382,19 @@ export function GenerationResults({
       setMobileRightPanelOpen(false);
     }
     onRegenerate?.();
-    await runGenerate({ shuffle: true, useCurrentResult: !!generatedImageUrl?.trim() }, 'regen');
-  }, [isMobile, onRegenerate, runGenerate, generatedImageUrl]);
+    const hasCurrentResult = !!generatedImageUrl?.trim();
+    const styleSelected = !!selectedStyle.trim();
+    const styleOnlyRequested = styleSelected && !selectedColor;
+    await runGenerate(
+      {
+        // If user selected a style, prioritize strict style reconfiguration over random shuffle.
+        shuffle: styleSelected ? false : true,
+        useCurrentResult: hasCurrentResult,
+        forceStyleOnly: styleSelected || styleOnlyRequested,
+      },
+      'regen'
+    );
+  }, [isMobile, onRegenerate, runGenerate, generatedImageUrl, selectedStyle, selectedColor]);
 
   const handleFinalizeClick = useCallback(() => {
     if (!roomSession) {
@@ -1773,22 +1934,24 @@ export function GenerationResults({
               Version {versionNumber}
               {isCurrent ? ' · current' : ''}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <div
-                style={{
-                  background: 'rgba(255,255,255,0.08)',
-                  borderRadius: '6px',
-                  padding: '3px 8px',
-                  fontSize: '10px',
-                  fontWeight: 500,
-                  color: 'rgba(255,255,255,0.70)',
-                  fontFamily: "'Inter', sans-serif",
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {selectedStyle}
+            {showStyleBadge && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <div
+                  style={{
+                    background: 'rgba(255,255,255,0.08)',
+                    borderRadius: '6px',
+                    padding: '3px 8px',
+                    fontSize: '10px',
+                    fontWeight: 500,
+                    color: 'rgba(255,255,255,0.70)',
+                    fontFamily: "'Inter', sans-serif",
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {selectedStyle}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       );
@@ -1853,6 +2016,8 @@ export function GenerationResults({
         ? roomSession.imagesDataUrl[roomSession.layoutIndex] ?? roomSession.imagesDataUrl[0]
         : selectedImageUrl;
     const currentResultImage =
+      (generatedImageRawUrl && generatedImageRawUrl.trim()) ||
+      (generatedImageUrl && generatedImageUrl.trim()) ||
       (apiResultImageUrl && apiResultImageUrl.trim()) ||
       (layoutForCustom && String(layoutForCustom).trim()) ||
       '';
@@ -1941,6 +2106,19 @@ export function GenerationResults({
     const descParts: string[] = [
       `Apply the selected look to the ${selectedCategory.toLowerCase()} only (${elementType}). Keep the same room layout, camera angle, perspective, and all other surfaces and objects unchanged.`,
     ];
+    if (elementType === 'wall') {
+      descParts.push(
+        'Cover every visible opaque wall plane continuously—including beside and above door and window openings, corners, and dim or sunlit sections—with the new finish; do not leave partial strips of bare concrete, primer, or old paint.'
+      );
+    }
+    if (
+      roomSession.configMode === 'arrangement' &&
+      (elementType === 'wall' || elementType === 'floor' || elementType === 'ceiling')
+    ) {
+      descParts.push(
+        'STRICT PRESERVE CONTENT: Do not add, restore, or invent any furniture, decor, lighting fixtures, rugs, tables, chairs, sofas, beds, plants, wall art, or props. If a region is empty after cleanup, it must remain empty. Update only the selected surface finish/color.'
+      );
+    }
     if (selectedMaterial?.trim()) {
       descParts.push(`Material / finish: ${selectedMaterial}.`);
     }
@@ -1966,15 +2144,25 @@ export function GenerationResults({
     setApiGenerateKind('customize');
     setApiError(null);
     setApiWarning(null);
+    const layoutAnchorImage =
+      roomSession.configMode === 'arrangement'
+        ? currentResultImage
+        : roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage;
+    const selectedStyleForApi =
+      roomSession.configMode === 'arrangement' ? undefined : selectedStyle;
+    const selectedColorPaletteIdForApi =
+      roomSession.configMode === 'arrangement'
+        ? undefined
+        : paletteDisplayNameToApiId(selectedColor) ?? undefined;
     try {
       const data = await postCustomizationGenerate({
         configType: roomSession.configType,
         currentResultImage,
-        layoutAnchorImage: roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage,
+        layoutAnchorImage,
         customizationStyles: { [elementType]: optionId },
         customizationLabels: { [elementType]: entry },
-        selectedStyle,
-        selectedColorPaletteId: paletteDisplayNameToApiId(selectedPalette) ?? undefined,
+        selectedStyle: selectedStyleForApi,
+        selectedColorPaletteId: selectedColorPaletteIdForApi,
       });
       if (data.error) {
         setApiError(data.error);
@@ -2017,7 +2205,7 @@ export function GenerationResults({
     editMytylesTiles,
     catalogStyleSwatchRows,
     selectedStyle,
-    selectedPalette,
+    selectedColor,
     onGeneratedImage,
     onGenerationHistoryAppend,
     isMobile,
@@ -2104,6 +2292,20 @@ export function GenerationResults({
   const showEditSwitchers = isCustomisation && customActiveTab !== null;
   const historyRailCollapsed = !showEditSwitchers && !showHistoryPanel;
   const leftHistoryRailWidth = isMobile ? (mobileHistoryOpen ? 270 : 0) : (showEditSwitchers ? 270 : showHistoryPanel ? 270 : 44);
+  const resetAddObjectState = useCallback(() => {
+    setCaptureRect(null);
+    setCaptureLocked(false);
+    setCaptureThumb(null);
+    setCapturePixelDims(null);
+    setSelectedAction(null);
+    setAddObjectSubPanel(null);
+    setAddSelectedCategory(null);
+    setAddPanelTab('Style');
+    setAddSelectedStyleSwatch(null);
+    setAddSelectedMaterial(null);
+    setAddSelectedMaterialImageUrl(null);
+    setAddSelectedColorDots(null);
+  }, []);
 
   const handleAddObjectApply = useCallback(async () => {
     if (customActiveTab !== 'Add Object' || apiGenerating) return;
@@ -2113,7 +2315,7 @@ export function GenerationResults({
     }
     if (!roomSession) {
       setApiError(
-        'Finish the room wizard first. With Vite dev, run the Next app on port 3000 so /api/edit is available.'
+        'Finish the room wizard first. With Vite dev, run the Next app on port 3000 so /api/add (inpaint) is available.'
       );
       return;
     }
@@ -2144,32 +2346,29 @@ export function GenerationResults({
     const verticalRegion =
       bbox.y + bbox.height / 2 < 0.33 ? 'upper' : bbox.y + bbox.height / 2 > 0.66 ? 'lower' : 'middle';
 
-    let prompt = '';
+    let addIntent = '';
     let referenceImageUrl: string | undefined;
     if (addObjectSubPanel === 'uploadedComponent' && confirmedUploadImages.length > 0) {
       const firstRef = confirmedUploadImages[0]?.trim();
       if (firstRef) {
         referenceImageUrl = firstRef;
       }
-      prompt = [
-        'Insert exactly ONE new photorealistic furniture/decor object completely INSIDE the white masked area. Do not move or repaint existing room objects.',
-        'Use the uploaded reference image(s) as strict shape and material guidance. Rebuild in scene perspective; never paste as a flat cutout.',
+      addIntent = [
+        'Add one new object in the selected area using the uploaded reference as strict shape/material guidance.',
         uploadedCompColour ? `Colour hint: ${uploadedCompColour}.` : '',
-        'Placement rule: keep the full object (top, sides, legs/base) fully visible inside the mask with natural margin on all sides; no clipping outside mask boundaries.',
-        'Match room lighting direction, cast a natural contact shadow, preserve floor/rug continuity under/around the object, and keep all pixels outside the mask unchanged.',
+        'Photorealistic and naturally integrated with room lighting/perspective.',
       ]
         .filter(Boolean)
         .join(' ');
     } else if (addObjectSubPanel === 'generatePrompt' && generatePromptText.trim()) {
       const userPromptLc = generatePromptText.trim().toLowerCase();
       const isFloorStandingObject = /(sofa|couch|chair|armchair|recliner|table|desk|cabinet|bed|stool|bench|ottoman|bookshelf|shelf|tv unit|console|wardrobe)/.test(userPromptLc);
-      prompt = [
+      addIntent = [
         buildStrictPromptObjectInstruction(generatePromptText),
         STRICT_PROMPT_OBJECT_RULES,
         isFloorStandingObject
-          ? 'Placement lock for floor-standing object: ground it on the existing floor plane INSIDE the selected mask and keep the entire object fully visible with natural margins (no clipped top/sides/legs).'
-          : 'Place exactly one requested object as the main subject fully inside the selected mask area with natural margins.',
-        'Hard constraints: add a NEW object only; do not repaint existing objects. Render only inside the mask, keep outside pixels unchanged, preserve floor/rug/background continuity, and avoid edge halos or cut-off boundaries.',
+          ? 'Place it grounded naturally on the floor/rug plane inside the selected area.'
+          : 'Place exactly one requested object naturally inside the selected area.',
       ].join(' ');
     } else if (!addObjectSubPanel && addSelectedCategory) {
       const hasPick =
@@ -2196,8 +2395,7 @@ export function GenerationResults({
         }
       }
       const parts: string[] = [
-        `Add exactly ONE new ${addSelectedCategory.toLowerCase()} object (${elementType}) fully inside the white masked region. This is an insertion request, not a repaint request.`,
-        'Do not edit, recolor, replace, move, or remove existing objects in the room.',
+        `Add one ${addSelectedCategory.toLowerCase()} object (${elementType}) in the selected area.`,
       ];
       if (styleDesc) parts.push(`Reference style / product: ${styleDesc}.`);
       if (addSelectedMaterial?.trim()) parts.push(`Material / finish: ${addSelectedMaterial.trim()}.`);
@@ -2209,25 +2407,30 @@ export function GenerationResults({
       if (isCatalogProductStyleKey(addSelectedStyleSwatch)) {
         parts.push(EXACT_CATALOG_OBJECT_INSTRUCTION);
       }
-      parts.push(
-        'Photorealistic, seamless blend. Match room lighting direction, perspective, and material highlights. Keep strict masked inpaint boundaries: render only in the masked area and do not modify pixels outside the mask.'
-      );
-      parts.push(
-        'The full inserted object must remain completely visible inside the selected mask with natural margins (no clipped or cut-off edges).'
-      );
-      prompt = parts.join(' ');
+      parts.push('Photorealistic, seamless blend. Match room lighting direction, perspective, and material highlights.');
+      addIntent = parts.join(' ');
     } else {
       setApiError('Select a category and style options, use Upload, or enter a text prompt before adding.');
       return;
     }
-    prompt = [
-      `INPAINTING TASK (EDIT LOGIC): modify ONLY the white masked region in this room image.`,
-      prompt,
-      `Area lock: use only the user-selected ${verticalRegion}-${horizontalRegion} capture area for the new object placement and keep the full object inside the selected box.`,
-      'Keep all pixels outside the mask unchanged exactly. Preserve the same room layout, camera framing, perspective, and existing objects.',
+    const placementGuardrail =
+      roomSession.configMode === 'arrangement'
+        ? 'Do not add, restore, or modify any object outside the selected area. Preserve empty regions exactly as empty.'
+        : 'Do not add extra objects, duplicates, props, or staging elements outside the selected area.';
+    const addIntegrationRule =
+      'Preserve floor tile/grout/pattern, rug threads, window glass, bars, door openings, and wall texture anywhere they remain visible—not a uniform flat color slab inside the rectangular selection.';
+    const prompt = [
+      `Change only the selected area (${verticalRegion}-${horizontalRegion}) in this interior photo to add: ${addIntent || 'one suitable object'}.`,
+      'Keep every other surface, object, layout, and lighting unchanged.',
+      placementGuardrail,
+      addIntegrationRule,
+      'Maintain the same camera, geometry, and scene composition; edit only inside the selected mask.',
+      'Photorealistic, seamless blend with natural contact shadows and correct perspective.',
     ].join(' ');
 
     const rawSource =
+      (generatedImageRawUrl && generatedImageRawUrl.trim()) ||
+      (generatedImageUrl && generatedImageUrl.trim()) ||
       (apiResultImageUrl && apiResultImageUrl.trim()) ||
       roomSession.imagesDataUrl[roomSession.layoutIndex] ||
       roomSession.imagesDataUrl[0] ||
@@ -2248,8 +2451,8 @@ export function GenerationResults({
     const maskDataUrl = await createMaskFromBoundingBox(imageDataUrl, bbox, {
       category: addCategory,
       expandGlobalSurface: false,
-      featherPx: 0,
-      autoFeatherForAdd: false,
+      // Feathered boundary matches room-editor add expectations: hides hard billboard edges vs background.
+      autoFeatherForAdd: true,
     });
     if (!maskDataUrl) {
       setApiError('Could not build the selection mask. Try again.');
@@ -2257,40 +2460,12 @@ export function GenerationResults({
     }
 
     if (!addObjectSubPanel && addSelectedCategory) {
-      const el = mapEditCategoryToApiElement(addSelectedCategory);
-      const refEligible =
-        el === 'wall' ||
-        el === 'floor' ||
-        el === 'ceiling' ||
-        el === 'sofa' ||
-        el === 'chair' ||
-        el === 'bed' ||
-        el === 'mattress' ||
-        el === 'carpet' ||
-        el === 'lighting' ||
-        el === 'decor' ||
-        el === 'table' ||
-        el === 'desk' ||
-        el === 'dining' ||
-        el === 'cabinet';
-      if (refEligible) {
-        if (addSelectedStyleSwatch?.trim()) {
-          const mytylesMatch = addSelectedStyleSwatch.match(/^mytyles-(\d+)$/);
-          if (mytylesMatch) {
-            const id = Number(mytylesMatch[1]);
-            const tile = editMytylesTiles.find((t) => t.id === id);
-            if (tile?.imageUrl?.trim()) {
-              referenceImageUrl = tile.imageUrl.trim();
-            }
-          } else {
-            const row = catalogStyleSwatchRows.find((r) => r.k === addSelectedStyleSwatch);
-            if (row?.img?.trim()) {
-              referenceImageUrl = row.img.trim();
-            }
-          }
-        }
-        if (!referenceImageUrl && addSelectedMaterial?.trim() && addSelectedMaterialImageUrl?.trim()) {
-          referenceImageUrl = addSelectedMaterialImageUrl.trim();
+      // Add-object should only use true catalog product images as strict references.
+      // Texture/material swatches frequently produce flat patch artifacts.
+      if (isCatalogProductStyleKey(addSelectedStyleSwatch)) {
+        const row = catalogStyleSwatchRows.find((r) => r.k === addSelectedStyleSwatch);
+        if (row?.img?.trim()) {
+          referenceImageUrl = row.img.trim();
         }
       }
       if (isCatalogProductStyleKey(addSelectedStyleSwatch) && !referenceImageUrl) {
@@ -2314,12 +2489,34 @@ export function GenerationResults({
     setApiError(null);
     setApiWarning(null);
     try {
-      const data = await postRoomAdd({
-        imageDataUrl,
-        maskDataUrl,
-        prompt,
-        referenceImageDataUrl,
-      });
+      const shouldRetry = (m: Awaited<ReturnType<typeof analyzeMaskedEditResult>>) => {
+        if (!m) return false;
+        const tooLittleChange = m.meanDiff < 10 || m.changedRatio < 0.12;
+        const flatWhiteArtifact = m.whiteRatio > 0.36 && m.variance < 180;
+        const patchFloodArtifact = m.changedRatio > 0.5 && m.variance < 900;
+        return tooLittleChange || flatWhiteArtifact || patchFloodArtifact;
+      };
+      let activePrompt = prompt;
+      let data = await postRoomAdd({ imageDataUrl, maskDataUrl, prompt: activePrompt, referenceImageDataUrl });
+      if (!data.error && data.imageUrl) {
+        const metrics = await analyzeMaskedEditResult(imageDataUrl, data.imageUrl, maskDataUrl);
+        if (shouldRetry(metrics)) {
+          activePrompt = [
+            prompt,
+            'RETRY REQUIRED: prior output is invalid.',
+            'Place one clearly visible, full 3D object strictly inside the selected mask area.',
+            'Forbidden: solid-color billboard over floor/window tiles, sticker-like rectangle, pastel mat replacing real grout/pattern/glazing.',
+            'Where floor or doorway/window pixels show inside the capture box, continue the exact same tiling/grille/daylight—not full-bleed object color.',
+            'Ensure natural object shading and shadows while keeping all outside-mask pixels unchanged.',
+          ].join(' ');
+          data = await postRoomAdd({
+            imageDataUrl,
+            maskDataUrl,
+            prompt: activePrompt,
+            referenceImageDataUrl,
+          });
+        }
+      }
       if (data.error) {
         setApiError(data.error);
         return;
@@ -2334,18 +2531,7 @@ export function GenerationResults({
       const wm = await applyWatermarkToImage(data.imageUrl);
       onGeneratedImage?.(wm, data.imageUrl);
       onGenerationHistoryAppend?.(wm, data.imageUrl);
-      setCaptureRect(null);
-      setCaptureLocked(false);
-      setCaptureThumb(null);
-      setCapturePixelDims(null);
-      setSelectedAction(null);
-      setAddObjectSubPanel(null);
-      setAddSelectedCategory(null);
-      setAddPanelTab('Style');
-      setAddSelectedStyleSwatch(null);
-      setAddSelectedMaterial(null);
-      setAddSelectedMaterialImageUrl(null);
-      setAddSelectedColorDots(null);
+      resetAddObjectState();
       playCompareReveal();
     } catch (e) {
       setApiError(e instanceof Error ? e.message : 'Add object failed.');
@@ -2373,6 +2559,7 @@ export function GenerationResults({
     generatedPreviewUrl,
     generatedImageUrl,
     apiResultImageUrl,
+    resetAddObjectState,
     onGenerationHistoryAppend,
     onGeneratedImage,
     playCompareReveal,
@@ -2588,6 +2775,8 @@ export function GenerationResults({
     }
 
     const rawSource =
+      (generatedImageRawUrl && generatedImageRawUrl.trim()) ||
+      (generatedImageUrl && generatedImageUrl.trim()) ||
       (apiResultImageUrl && apiResultImageUrl.trim()) ||
       roomSession.imagesDataUrl[roomSession.layoutIndex] ||
       roomSession.imagesDataUrl[0] ||
@@ -2625,6 +2814,11 @@ export function GenerationResults({
       `Apply the selected look to only the ${replaceSelectedCategory?.toLowerCase() || 'selected object'} (${elementType}) in the user-selected ${vertical}-${horizontal} region. Keep the same room layout, camera angle, perspective, and all other surfaces and objects unchanged.`,
       'Only the object inside the selected region should change. Do not alter matching objects elsewhere in the room.',
     ];
+    if (elementType === 'wall') {
+      descParts.push(
+        'Within the wall surfaces in that region, cover the full opaque plane continuously (including beside/above openings); no leftover bare patches next to recolored areas.'
+      );
+    }
     if (replaceSelectedMaterial?.trim()) {
       descParts.push(`Material / finish: ${replaceSelectedMaterial}.`);
     }
@@ -2654,15 +2848,25 @@ export function GenerationResults({
     setApiGenerateKind('replace');
     setApiError(null);
     setApiWarning(null);
+    const layoutAnchorImage =
+      roomSession.configMode === 'arrangement'
+        ? currentResultImage
+        : roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage;
+    const selectedStyleForApi =
+      roomSession.configMode === 'arrangement' ? undefined : selectedStyle;
+    const selectedColorPaletteIdForApi =
+      roomSession.configMode === 'arrangement'
+        ? undefined
+        : paletteDisplayNameToApiId(selectedColor) ?? undefined;
     try {
       const data = await postCustomizationGenerate({
         configType: roomSession.configType,
         currentResultImage,
-        layoutAnchorImage: roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage,
+        layoutAnchorImage,
         customizationStyles: { [elementType]: optionId },
         customizationLabels: { [elementType]: entry },
-        selectedStyle,
-        selectedColorPaletteId: paletteDisplayNameToApiId(selectedPalette) ?? undefined,
+        selectedStyle: selectedStyleForApi,
+        selectedColorPaletteId: selectedColorPaletteIdForApi,
       });
       if (data.error) {
         setApiError(data.error);
@@ -2756,6 +2960,8 @@ export function GenerationResults({
       return;
     }
     const rawSource =
+      (generatedImageRawUrl && generatedImageRawUrl.trim()) ||
+      (generatedImageUrl && generatedImageUrl.trim()) ||
       (apiResultImageUrl && apiResultImageUrl.trim()) ||
       roomSession.imagesDataUrl[roomSession.layoutIndex] ||
       roomSession.imagesDataUrl[0] ||
@@ -2774,8 +2980,22 @@ export function GenerationResults({
     try {
       const data = !useFullComponentsErase
         ? await (async () => {
-            // Strict region erase: always use hard mask edit path (no loose fallback).
-            const eraseMaskDataUrl = await createMaskFromBoundingBox(dataUrlResult, eraseRegion, {
+            // Erase should behave like robust edit workflow: slightly expand around selection
+            // so object edges/shadows are fully removed in one pass.
+            const expandedEraseRegion = (() => {
+              const grow = 0.24;
+              const x = Math.max(0, eraseRegion.x - eraseRegion.width * grow);
+              const y = Math.max(0, eraseRegion.y - eraseRegion.height * grow);
+              const r = Math.min(1, eraseRegion.x + eraseRegion.width * (1 + grow));
+              const b = Math.min(1, eraseRegion.y + eraseRegion.height * (1 + grow));
+              return {
+                x,
+                y,
+                width: Math.max(0.02, r - x),
+                height: Math.max(0.02, b - y),
+              };
+            })();
+            const eraseMaskDataUrl = await createMaskFromBoundingBox(dataUrlResult, expandedEraseRegion, {
               expandGlobalSurface: false,
             });
             if (!eraseMaskDataUrl) {
@@ -2786,12 +3006,41 @@ export function GenerationResults({
               'Boundary lock: edits must remain 100% inside the mask; do not change any pixel outside the mask.',
               'Do not add new furniture/decor/textures that are not natural continuation of surrounding wall/floor/rug.',
               'Keep perspective, lighting, and texture continuity at mask edges with a seamless blend.',
+              'Hard requirement: fully remove object remnants, shadows, reflections, and contact marks inside mask.',
             ].join(' ');
-            return postRoomReplace({
+            let firstPass = await postRoomReplace({
               imageDataUrl: dataUrlResult,
               maskDataUrl: eraseMaskDataUrl,
               prompt: erasePrompt,
             });
+            if (firstPass.error || !firstPass.imageUrl) {
+              return firstPass;
+            }
+            const eraseMetrics = await analyzeMaskedEditResult(
+              dataUrlResult,
+              firstPass.imageUrl,
+              eraseMaskDataUrl
+            );
+            const needsSecondPass =
+              !eraseMetrics ||
+              eraseMetrics.meanDiff < 10 ||
+              eraseMetrics.changedRatio < 0.12 ||
+              (eraseMetrics.whiteRatio > 0.38 && eraseMetrics.variance < 170);
+            if (!needsSecondPass) {
+              return firstPass;
+            }
+            const secondPassPrompt = [
+              erasePrompt,
+              'SECOND PASS REQUIRED: previous erase is incomplete.',
+              'Fully inpaint remaining subject traces in masked region and produce clean continuous background.',
+              'No ghosting, no leftover object fragments, no white/flat patch.',
+            ].join(' ');
+            firstPass = await postRoomReplace({
+              imageDataUrl: firstPass.imageUrl,
+              maskDataUrl: eraseMaskDataUrl,
+              prompt: secondPassPrompt,
+            });
+            return firstPass;
           })()
         : await postRoomErase({
             configType: roomSession.configType,
@@ -3921,22 +4170,24 @@ export function GenerationResults({
               opacity:      1,
             }}
           >
-            <div
-              style={{
-                background:   'rgba(0,0,0,0.65)',
-                border:       '1px solid rgba(255,255,255,0.15)',
-                borderRadius: '8px',
-                padding:      '4px 10px',
-                fontSize:     '11px',
-                fontWeight:   300,
-                color:        'rgba(255,255,255,0.95)',
-                fontFamily:   "'Inter', sans-serif",
-                whiteSpace:   'nowrap',
-                transition:   'all 180ms ease',
-              }}
-            >
-              {selectedStyle}
-            </div>
+            {showStyleBadge && (
+              <div
+                style={{
+                  background:   'rgba(0,0,0,0.65)',
+                  border:       '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px',
+                  padding:      '4px 10px',
+                  fontSize:     '11px',
+                  fontWeight:   300,
+                  color:        'rgba(255,255,255,0.95)',
+                  fontFamily:   "'Inter', sans-serif",
+                  whiteSpace:   'nowrap',
+                  transition:   'all 180ms ease',
+                }}
+              >
+                {selectedStyle}
+              </div>
+            )}
             {selectedColorDots && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 {selectedColorDots.map((color, i) => (
@@ -4012,46 +4263,129 @@ export function GenerationResults({
                 History
               </button>
             ) : (
-              <div
+              <>
+                {isCustomComponentConfiguration && customActiveTab === 'Erase' ? (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAction('capture')}
+                      style={{
+                        height: '30px',
+                        padding: '0 10px',
+                        borderRadius: '9px',
+                        border: `1px solid ${selectedAction === 'capture' ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)'}`,
+                        background: selectedAction === 'capture' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.55)',
+                        color: 'rgba(255,255,255,0.9)',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        fontFamily: "'Inter', sans-serif",
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      Capture Area
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAction('erase-full-components')}
+                      style={{
+                        height: '30px',
+                        padding: '0 10px',
+                        borderRadius: '9px',
+                        border: `1px solid ${selectedAction === 'erase-full-components' ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)'}`,
+                        background: selectedAction === 'erase-full-components' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.55)',
+                        color: 'rgba(255,255,255,0.9)',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        fontFamily: "'Inter', sans-serif",
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      Erase Full Components
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      height: '30px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '0 10px',
+                      borderRadius: '9px',
+                      border: '1px solid rgba(255,255,255,0.22)',
+                      background: 'rgba(0,0,0,0.55)',
+                      color: 'rgba(255,255,255,0.9)',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      fontFamily: "'Inter', sans-serif",
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}
+                  >
+                    Capture Area Mode
+                  </div>
+                )}
+              </>
+            )}
+            {isMobileDirectCaptureFlow &&
+              customActiveTab === 'Erase' &&
+              isCustomComponentConfiguration &&
+              selectedAction === 'erase-full-components' && (
+              <button
+                type="button"
+                disabled={!canApplyErase}
+                onClick={() => void handleEraseApply()}
                 style={{
                   height: '30px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
                   padding: '0 10px',
                   borderRadius: '9px',
-                  border: '1px solid rgba(255,255,255,0.22)',
-                  background: 'rgba(0,0,0,0.55)',
-                  color: 'rgba(255,255,255,0.9)',
+                  border: `1px solid ${canApplyErase ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.22)'}`,
+                  background: canApplyErase ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.55)',
+                  color: '#ffffff',
                   fontSize: '11px',
-                  fontWeight: 500,
+                  fontWeight: 600,
                   fontFamily: "'Inter', sans-serif",
                   whiteSpace: 'nowrap',
+                  cursor: canApplyErase ? 'pointer' : 'not-allowed',
+                  opacity: canApplyErase ? 1 : 0.6,
                   flexShrink: 0,
                 }}
               >
-                Capture Area Mode
+                {apiGenerating && apiGenerateKind === 'erase' ? 'Erasing…' : 'Apply Erase'}
+              </button>
+            )}
+            {showStyleBadge && (
+              <div
+                style={{
+                  background:   'rgba(0,0,0,0.55)',
+                  border:       '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '8px',
+                  padding:      '3px 8px',
+                  fontSize:     '10px',
+                  fontWeight:   400,
+                  color:        'rgba(255,255,255,0.95)',
+                  fontFamily:   "'Inter', sans-serif",
+                  whiteSpace:   'nowrap',
+                  maxWidth:     '38%',
+                  overflow:     'hidden',
+                  textOverflow: 'ellipsis',
+                  flexShrink:   1,
+                }}
+                title={selectedStyle}
+              >
+                {selectedStyle}
               </div>
             )}
-            <div
-              style={{
-                background:   'rgba(0,0,0,0.55)',
-                border:       '1px solid rgba(255,255,255,0.15)',
-                borderRadius: '8px',
-                padding:      '3px 8px',
-                fontSize:     '10px',
-                fontWeight:   400,
-                color:        'rgba(255,255,255,0.95)',
-                fontFamily:   "'Inter', sans-serif",
-                whiteSpace:   'nowrap',
-                maxWidth:     '38%',
-                overflow:     'hidden',
-                textOverflow: 'ellipsis',
-                flexShrink:   1,
-              }}
-              title={selectedStyle}
-            >
-              {selectedStyle}
-            </div>
             {selectedColorDots && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto', flexShrink: 0 }}>
                 {selectedColorDots.slice(0, 6).map((color, i) => (
@@ -4456,6 +4790,50 @@ export function GenerationResults({
                 </button>
               )}
             </>
+          )}
+          {isMobileDirectCaptureFlow &&
+            customActiveTab === 'Erase' &&
+            isCustomComponentConfiguration &&
+            selectedAction === 'erase-full-components' && (
+            <button
+              type="button"
+              disabled={!canApplyErase}
+              onClick={() => void handleEraseApply()}
+              style={{
+                position: 'absolute',
+                left: '50%',
+                bottom: 16,
+                transform: 'translateX(-50%)',
+                minWidth: 190,
+                height: 38,
+                padding: '0 14px',
+                background: '#000000',
+                border: '1px solid #ffffff',
+                borderRadius: 10,
+                color: '#ffffff',
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: "'Inter', sans-serif",
+                letterSpacing: '-0.1px',
+                cursor: !canApplyErase ? 'not-allowed' : 'pointer',
+                boxShadow: '0px 4px 18px rgba(0,0,0,0.35)',
+                transition: 'background 150ms ease',
+                opacity: !canApplyErase ? 0.55 : 1,
+                zIndex: 10,
+                whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={(e) => {
+                if (!canApplyErase) return;
+                (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.08)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = '#000000';
+              }}
+            >
+              {apiGenerating && apiGenerateKind === 'erase'
+                ? 'Erasing…'
+                : 'Apply full component erase'}
+            </button>
           )}
 
           {/* Placing component dot grid overlay */}
@@ -5927,7 +6305,7 @@ export function GenerationResults({
           >
             {palettes.map(palette => {
               const isStyleTab = activeTab === 'style';
-              const isSel = isStyleTab ? selectedStyle === palette.name : selectedPalette === palette.name;
+              const isSel = isStyleTab ? selectedStyle === palette.name : selectedColor === palette.name;
               const styleImg = isStyleTab && 'img' in palette ? (palette as { img?: string }).img : null;
               return (
                 <div
@@ -5936,7 +6314,7 @@ export function GenerationResults({
                     if (isStyleTab) {
                       setSelectedStyle(palette.name);
                     } else {
-                      setSelectedPalette(isSel ? null : palette.name);
+                      setSelectedColor(isSel ? null : palette.name);
                       if ('dots' in palette) setSelectedColorDots(palette.dots);
                     }
                   }}

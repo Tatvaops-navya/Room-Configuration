@@ -133,6 +133,9 @@ const ADD_MIN_CORE_PIXELS = 400
 const ADD_MIN_MEAN_ABS_DIFF = 9
 const REPLACE_MIN_CORE_PIXELS = 400
 const REPLACE_MIN_MEAN_ABS_DIFF = 10
+const MASK_VARIANCE_SAMPLE_MIN = 400
+/** Slabs over tiling + glazing often collapse global luma variance in mask; plush objects usually stay above ~46. */
+const ADD_MASKED_LUMA_VARIANCE_RETRY_BELOW = 46
 
 function isLikelyFloorStandingPrompt(userPrompt?: string): boolean {
   const t = (userPrompt || '').toLowerCase()
@@ -259,6 +262,47 @@ async function hasAddWhiteBackgroundArtifact(
     return outRatio >= 0.45 && (outRatio - srcRatio) >= 0.22
   } catch {
     return false
+  }
+}
+
+/**
+ * Population luminance variance in high-confidence masked pixels — low values often mean billboard fill.
+ */
+async function maskedRegionLumaVariance(outputDataUrl: string, maskDataUrl: string): Promise<number | null> {
+  try {
+    const out = parseDataUrl(outputDataUrl)
+    const mask = parseDataUrl(maskDataUrl)
+    if (!out || !mask) return null
+
+    const outBuf = Buffer.from(out.data, 'base64')
+    const maskBuf = Buffer.from(mask.data, 'base64')
+
+    const meta = await sharp(outBuf).metadata()
+    const width = meta.width ?? 0
+    const height = meta.height ?? 0
+    if (width <= 0 || height <= 0) return null
+
+    const outRaw = await sharp(outBuf).resize(width, height).removeAlpha().raw().toBuffer()
+    const maskRaw = await sharp(maskBuf).resize(width, height).removeAlpha().raw().toBuffer()
+
+    let n = 0
+    let sum = 0
+    let sumSq = 0
+    for (let i = 0, p = 0; i < maskRaw.length; i += 3, p++) {
+      const ml = (maskRaw[i] + maskRaw[i + 1] + maskRaw[i + 2]) / 3
+      if (ml < 200) continue
+      const oi = p * 3
+      const lum = (outRaw[oi] + outRaw[oi + 1] + outRaw[oi + 2]) / 3
+      sum += lum
+      sumSq += lum * lum
+      n++
+    }
+    if (n < MASK_VARIANCE_SAMPLE_MIN) return null
+    const mean = sum / n
+    const variance = Math.max(0, sumSq / n - mean * mean)
+    return variance
+  } catch {
+    return null
   }
 }
 
@@ -611,11 +655,21 @@ RUG / CARPET / HARD FLOOR CONTINUITY:
 • If the source shows a rug, carpet, or patterned floor inside or next to the mask, continue that exact texture, scale, and perspective under the object’s base — do not replace rug with plain tile, smooth concrete, or a different pattern unless the photograph already shows that transition.
 • Legs or plinths sit on the continued surface; do not cut off the rug abruptly at an artificial straight edge under the object.
 
+WALL SURFACE CONTINUITY (MIRRORS, ART, SHELVES, SCONCES):
+• If most of the mask is wall space, preserve the existing wall finish (color, plaster/stucco noise, wallpaper, panel lines) everywhere except where the new object physically covers it. Extend the same wall texture behind and around the object at the correct perspective.
+• NEVER replace the masked wall with a flat solid gray, off-white, cream, or uniform fill that does not match the surrounding wall — that reads as a pasted rectangle, not a real room.
+• New pixels should be the added object plus natural wall contact shadow and thin frame geometry; the wall substrate must match adjacent visible wall pixels in hue, grain, and lighting.
+
 FLOOR LINE — NO WHITE MAT / STRIP (CRITICAL):
 • NEVER paint a white, off-white, cream, light gray, or flat “paper” rectangle, band, or plinth along the bottom of the object where it meets the floor.
 • NEVER leave an e-commerce “studio floor” or product-base mat under cabinets, bookcases, or legs.
 • The real floor from the photograph (tile pattern, grout, wood planks, carpet/rug texture) must continue seamlessly under and around the object’s base inside the mask — same hue, noise, and perspective as adjacent visible floor.
 • Any kick plate or plinth on the furniture must be stained wood, painted trim, or metal matching the unit — not pure white unless the room’s trim is actually white and continuous with surroundings.
+
+SOFAS / CHAIRS ON PATTERNED FLOOR OR TILE (CRITICAL — NO FULL-BLEED BILLBOARD):
+• The selection box is only a GUIDE for placement—not a billboard to repaint. Everywhere inside the rectangle that shows **floor**, **open doorway/outside light**, **window glazing, bars/grilles, sill, reflections**, OR **distinct wall plaster** MUST stay tied to **the SAME pixels/details as the FIRST photo** wherever the furniture does not genuinely occlude them.
+• A sofa skirt, frame, cushions, pillows, legs, arms, tufting, and cast shadows are allowed to change—but you MUST preserve local floor/window/door realism in exposed zones: patterned tiles keep their pattern continuity; barred windows remain visible translucent glass with daylight — NOT flattened to a solid upholstered color slab.
+• If part of an open doorway or window falls inside the white mask but is **visible around** the silhouette of the couch, KEEP that outdoor light and architecture—do NOT smear upholstery yellow (or any object color) over it as one opaque rectangle.
 
 SPATIAL RULE — USER BOX ONLY:
 • Bright mask = only region where pixels may change. The object’s footprint on the floor must fall inside that rectangle in image coordinates.
@@ -781,6 +835,14 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
 
       let workingUrl = await processMaskedOutput(first.imageUrl)
       let replaceChange = await maskedRegionMeanAbsDiff(imageDataUrl, workingUrl, maskDataUrl)
+      let addChange =
+        operation === 'add'
+          ? await maskedRegionMeanAbsDiff(imageDataUrl, workingUrl, maskDataUrl)
+          : { mean: 0, corePixels: 0 }
+      let addFootprint =
+        operation === 'add'
+          ? await maskedChangedFootprint(imageDataUrl, workingUrl, maskDataUrl)
+          : { changedRatio: 0, bboxAreaRatio: 0, changedPixels: 0, maskPixels: 0 }
 
       if (operation === 'replace' && replaceChange.corePixels >= REPLACE_MIN_CORE_PIXELS && replaceChange.mean < REPLACE_MIN_MEAN_ABS_DIFF) {
         const retry = await callModel(
@@ -792,18 +854,65 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
         }
       }
 
+      // Add-mode quality gate: reject tiny/weak edits and reject "whole-box repaint" slabs.
+      if (operation === 'add') {
+        const tooLittleAddChange =
+          addChange.corePixels >= ADD_MIN_CORE_PIXELS && addChange.mean < ADD_MIN_MEAN_ABS_DIFF
+        const addTooSmall = addFootprint.maskPixels >= 1200 && addFootprint.changedRatio < 0.05
+        const addTooBroad = addFootprint.maskPixels >= 1200 && addFootprint.changedRatio > 0.56
+        if (tooLittleAddChange || addTooSmall || addTooBroad) {
+          const retry = await callModel(
+            addTooBroad
+              ? 'RETRY FIX REQUIRED: previous output repainted too much of the selected box. Add only one object; do not flood-fill the rectangle. Preserve floor/window/door details anywhere not physically occluded by the new object.'
+              : 'RETRY FIX REQUIRED: added object is too weak/partial. Place one clearly visible full 3D object inside the white mask with proper perspective and contact shadows, while preserving surrounding room details.'
+          )
+          if (retry.imageUrl) {
+            workingUrl = await processMaskedOutput(retry.imageUrl)
+            addChange = await maskedRegionMeanAbsDiff(imageDataUrl, workingUrl, maskDataUrl)
+            addFootprint = await maskedChangedFootprint(imageDataUrl, workingUrl, maskDataUrl)
+          }
+        }
+      }
+
       // Replace/edit can also return a "catalog card" style white rectangle artifact.
       const artifact = await hasAddWhiteBackgroundArtifact(workingUrl, imageDataUrl, maskDataUrl)
       const flatCard = await hasFlatCardArtifact(workingUrl, maskDataUrl)
-      if (artifact || flatCard) {
+      const addMaskedVar =
+        operation === 'add'
+          ? await maskedRegionLumaVariance(workingUrl, maskDataUrl)
+          : null
+      const addLooksLikeFlatBillboard =
+        operation === 'add' &&
+        addMaskedVar !== null &&
+        addMaskedVar < ADD_MASKED_LUMA_VARIANCE_RETRY_BELOW
+      if (artifact || flatCard || addLooksLikeFlatBillboard) {
         const retry = await callModel(
-          'RETRY FIX REQUIRED: previous output looks like a pasted product card / sticker (flat, near-uniform patch) in the masked area. Repaint the region photorealistically in-scene with NO white/gray studio backdrop, NO flat cutout, and NO rectangular panel. Keep all pixels outside the black/unchanged mask identical to the first image.'
+          artifact || flatCard
+            ? 'RETRY FIX REQUIRED: previous output looks like a pasted product card / sticker (flat, near-uniform patch) in the masked area. Repaint the region photorealistically in-scene with NO white/gray studio backdrop, NO flat cutout, and NO rectangular panel. Keep all pixels outside the black/unchanged mask identical to the first image.'
+            : 'RETRY FIX REQUIRED — MASKED ZONE STILL “POSTER BOARD”: The editable region lacks real scene texture—it reads as one flat tinted layer instead of wallpaper/floor glazing/door daylight continuing behind and between furniture silhouette. Fully re-render INSIDE WHITE ONLY: reconstruct the SAME floor pattern and grout/reflection continuity under legs and skirts; barred windows/transom/door openings keep real transparency and grille geometry where visible; upholstered pieces get real 3D volume, shading, tufted seams, shadows—NOT uniform paint over the rectangle. Forbidden: billboard fill, solid color card over tiling or glazing. Black mask untouched.'
         )
         if (retry.imageUrl) {
           const retried = await processMaskedOutput(retry.imageUrl)
           workingUrl = await cleanAddWhiteArtifactPixels(retried, imageDataUrl, maskDataUrl)
         } else {
           workingUrl = await cleanAddWhiteArtifactPixels(workingUrl, imageDataUrl, maskDataUrl)
+        }
+      }
+
+      // Add-only second pass when texture still collapses after first retry bucket.
+      if (operation === 'add') {
+        const v = await maskedRegionLumaVariance(workingUrl, maskDataUrl)
+        if (v !== null && v < ADD_MASKED_LUMA_VARIANCE_RETRY_BELOW) {
+          const second = await callModel(
+            'SECOND RETRY — STILL FAILING QUALITY GATE: Visible floor tile/circle grout pattern, doorway outdoor light, and window bars MUST match first-image reality anywhere they show through—not one flat tinted rectangle. Couch volumes only where fabric exists; carve negative space/light paths. Seamless photographic integration.'
+          )
+          if (second.imageUrl) {
+            workingUrl = await cleanAddWhiteArtifactPixels(
+              await processMaskedOutput(second.imageUrl),
+              imageDataUrl,
+              maskDataUrl
+            )
+          }
         }
       }
 

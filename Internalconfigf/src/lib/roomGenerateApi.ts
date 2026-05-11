@@ -518,7 +518,8 @@ export async function createMaskFromBoundingBox(
       let feather = options?.featherPx
       if (feather === undefined && options?.autoFeatherForAdd) {
         const m = Math.min(w, h)
-        feather = Math.max(3, Math.min(12, Math.round(m * 0.0065)))
+        // Keep a moderate feather: enough to hide hard seams, but not so large that the object fades away.
+        feather = Math.max(6, Math.min(20, Math.round(m * 0.008)))
       }
       if (feather != null && feather > 0) {
         const blur = Math.min(Math.round(feather), 64)
@@ -553,7 +554,7 @@ export async function createMaskFromBoundingBox(
   })
 }
 
-/** Masked inpaint add — intentionally routed through the same edit path (`POST /api/edit`). */
+/** Masked inpaint add — use same path/logic as edit; only mask source differs (captured area). */
 export async function postRoomAdd(opts: {
   imageDataUrl: string
   maskDataUrl: string
@@ -570,8 +571,9 @@ export async function postRoomAdd(opts: {
     ref && ref.includes(',') && ref.length > 32 ? ref : undefined
   let res: Response
   try {
-    // Add should use the same placement logic as Edit; only mask differs (user-selected area).
-    res = await fetch(buildApiUrl('/api/edit'), {
+    // Must use `/api/add` so the server runs `operation === 'add'` (native in-scene add prompt + checks).
+    // Posting to `/api/edit` only runs the generic inpaint brief and commonly fills the capture rectangle with flat gray/neutral patches.
+    res = await fetch(buildApiUrl('/api/add'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -801,6 +803,8 @@ export type PostRoomGenerateOptions = {
   shuffle?: boolean
   /** Enforce strict layout preservation in generation prompting. */
   strictLayoutLock?: boolean
+  /** Force strong style-only reconfiguration when no palette is selected. */
+  forceStyleOnly?: boolean
 }
 
 export async function postRoomGenerate(
@@ -837,9 +841,17 @@ export async function postRoomGenerate(
   const layoutIndexPayload = 0
   const fullRoomAdditionalText = buildFullRoomAdditionalText(session)
   const normalizedPurposeInput = session.roomContext?.trim()
+  const styleTrimmed = typeof selectedStyle === 'string' ? selectedStyle.trim() : ''
   const fallbackPurposeInput =
     'Re-render this exact space in the selected interior style and color palette. Keep layout, architecture, furniture positions, and camera viewpoint unchanged; update only finishes, colors, materials, and lighting mood to match the style.'
-  const purposeInput = normalizedPurposeInput || fallbackPurposeInput
+  const styleOnlyInstruction =
+    options?.forceStyleOnly && styleTrimmed
+      ? `STRICT STYLE SWITCH: Reconfigure this exact room to ${styleTrimmed} style. Keep the same layout, structure, furniture positions, and camera viewpoint. Change only style expression, materials, finishes, decor language, and lighting mood to match ${styleTrimmed}.`
+      : ''
+  const purposeInput =
+    styleOnlyInstruction && normalizedPurposeInput
+      ? `${styleOnlyInstruction}\n\n${normalizedPurposeInput}`
+      : styleOnlyInstruction || normalizedPurposeInput || fallbackPurposeInput
   const effectiveMode: 'purpose' | 'arrangement' = configMode === 'arrangement' ? 'arrangement' : 'purpose'
   const arrangementConfig =
     effectiveMode === 'arrangement'
@@ -867,7 +879,8 @@ export async function postRoomGenerate(
 
   const omitStylePalette =
     session.omitWizardStyleAndPalette === true && effectiveMode === 'arrangement'
-  const styleTrimmed = typeof selectedStyle === 'string' ? selectedStyle.trim() : ''
+  const shouldSendSelectedStyle =
+    !!styleTrimmed && (!omitStylePalette || options?.forceStyleOnly === true)
   const paletteForBody = omitStylePalette ? undefined : paletteId ?? undefined
   const optimizedCurrentResultImage =
     useCurrent && cur
@@ -906,7 +919,7 @@ export async function postRoomGenerate(
         strictLayoutLock: options?.strictLayoutLock !== false,
         purposeInput: effectiveMode === 'purpose' ? purposeInput : undefined,
         arrangementConfig,
-        ...(omitStylePalette || !styleTrimmed ? {} : { selectedStyle: styleTrimmed }),
+        ...(shouldSendSelectedStyle ? { selectedStyle: styleTrimmed } : {}),
         ...(paletteForBody ? { selectedColorPalette: paletteForBody } : {}),
         vastuEnabled: false,
         ...(componentReferenceImages && componentReferenceImages.length > 0

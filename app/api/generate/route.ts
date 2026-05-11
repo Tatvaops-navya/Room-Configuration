@@ -871,6 +871,9 @@ OUTPUT: The SAME ${isExternal ? 'property' : 'room'} as the user's images. Do NO
 
       const elementList = Object.keys(customizationLabels).join(', ')
       const hasFloorTileRef = hasTileReferenceImages && customizationReferenceImages?.some((r) => r.elementType === 'floor')
+      const wallLabelEntry = customizationLabels.wall
+      const hasWallCustomization =
+        Boolean(wallLabelEntry && wallLabelEntry.action !== 'erase')
       const floorMandatoryBlock =
         hasFloorTileRef
           ? `
@@ -880,6 +883,17 @@ MANDATORY – FLOOR MUST CHANGE: The user has selected a new floor tile. You MUS
 - REMOVE the existing floor finish entirely. Then show ONLY the new floor tile from the reference – one continuous surface, no overlay, no leftover previous pattern.
 - If the floor does not visibly change in your output, the result is wrong.`
           : ''
+      const wallMandatoryBlock =
+        hasWallCustomization
+          ? `
+
+MANDATORY – FULL WALL COVERAGE (PAINT, PLASTER, OR TILE ON WALLS):
+When **wall** is listed, apply the new wall color or finish to **every contiguous visible opaque wall surface** in the photograph — not only a central band or the easiest-lit area.
+- Include wall beside and above door openings, around window reveals, corner returns, side walls, and any L-shaped or split planes that are the same interior shell. Do NOT leave vertical or horizontal strips of bare concrete, gray plaster, primer, or the previous finish next to newly painted areas (no "half wall" or rectangular unpainted holes, especially around doors and bright exterior views).
+- Treat strong sunlight, shadows, and high contrast at door/window edges as **lighting only** — still extend the same wall treatment across the full plane, including into darker zones and up to (but not over) door/window frames and wood door leaves.
+- One coherent wall appearance per plane: uniform color/texture except where real trim or architecture intentionally differs. If any obvious patch of old wall remains visible while the rest is recolored, the output is wrong.
+- Preserve every door, frame, glass, handle, and window exactly; change **only** opaque wall substrate (paint/tile/panels), not openings or joinery.`
+          : ''
       const tileRefInstruction =
         hasTileReferenceImages
           ? `
@@ -887,7 +901,7 @@ MANDATORY – FLOOR MUST CHANGE: The user has selected a new floor tile. You MUS
 CRITICAL – FLOOR/WALL TILE: FULL REPLACEMENT, NO OVERLAY, NO LOGOS
 The image you receive may be a PREVIOUS RESULT (e.g. already customized walls/floor). For wall/floor you MUST:
 - REMOVE the existing surface completely. Any current pattern (e.g. hexagonal tiles, wood, paint) must disappear entirely – do NOT blend, overlay, or leave it visible under the new tile.
-- REPLACE with ONLY the tile from the reference image below. One single continuous surface: the whole floor (or wall) shows nothing but the new tile. No double texture, no visible previous finish, no patches.
+- REPLACE with ONLY the tile from the reference image below. One single continuous surface: the whole floor (or wall) shows nothing but the new tile. No double texture, no visible previous finish, no patches. On **walls**, cover jambs, returns, and full height beside open doorways — not only the main rectangle away from the door.
 - Match the reference tile's pattern, color, and texture precisely. Furniture sits on the new floor; walls show only the new tile from edge to edge.
 - GLASS, WINDOWS, DOORS, PARTITIONS — DO NOT TOUCH: When "wall" is listed, change ONLY opaque wall finishes (paint, tile, panels on solid wall). You MUST preserve every glass door, sliding door, fixed glazing, glass partition, storefront window, reception glass, and regular window EXACTLY: same position, size, frame, mullions, transparency, and reflections. NEVER remove glazing, NEVER replace glass with solid wall, NEVER block openings that were transparent in the input. If you remove or brick over a glass door or window, the output is WRONG.
 - NEVER OUTPUT THE REFERENCE PHOTO ITSELF: Catalog/tile reference images often show people, hands, showrooms, or slabs being held — your output must still be ONLY the same ROOM photograph as the main input with new tile on surfaces. Do NOT generate people, product shoots, stone slabs in hands, or any scene that looks like a tile brochure. Wrong = any human figures or studio product photography.
@@ -908,7 +922,7 @@ ABSOLUTE RULES:
 - Keep the exact same camera angle, framing, proportions, and all unlisted elements completely unchanged.
 - The output must look like the same photograph with ONLY those listed elements changed.`
         : `${DESIGN_CONTEXT_PREFIX}Professional interior design visualization.
-${floorMandatoryBlock}
+${floorMandatoryBlock}${wallMandatoryBlock}
 
 IDENTITY LOCK — SAME PHOTOGRAPH AS INPUT (ONLY MATERIALS CHANGE):
 The room image you receive is the single source of truth for camera, lens, crop, and composition. Your output must be that EXACT same shot: a viewer overlaying input and output would see identical geometry — same ceiling line, same floor line, same left/right edges, same full sofa and chairs (including bases), same reception desk and glass — with ONLY the listed surfaces (e.g. wall/floor/sofa finish) looking different. Think masked retouch, not a new render or re-photograph from a new viewpoint.
@@ -1483,9 +1497,8 @@ export async function POST(request: NextRequest) {
       !hasCustomizationStyles &&
       !hasExternalCustomization
 
-    // In style-only reconfigure, slightly increase randomness so the model doesn't return an identical-looking image.
-    // This does NOT allow layout changes; it only helps the model commit to new style/palette visually.
-    const effectiveShuffle = (shuffle || false) || isStyleOnlyReconfigure
+    // Style-only reconfigure must stay deterministic to avoid layout/camera drift.
+    const effectiveShuffle = shuffle || false
 
     const minImages = 4
     const explicitLayoutAnchorImage =
@@ -1509,7 +1522,11 @@ export async function POST(request: NextRequest) {
         ? currentResultImage.trim()
         : null
     let imagesForGeneration: string[] = Array.isArray(images) ? images : []
-    if (hasLayoutAnchor && currentResultTrimmed && currentResultTrimmed !== lockedLayoutImage && (isCustomizationMode || isStyleOnlyReconfigure)) {
+    if (isStyleOnlyReconfigure && currentResultTrimmed) {
+      // For style-only regenerate, preserve exact latest composition by using
+      // the current generated frame as the sole structural source.
+      imagesForGeneration = [currentResultTrimmed]
+    } else if (hasLayoutAnchor && currentResultTrimmed && currentResultTrimmed !== lockedLayoutImage && isCustomizationMode) {
       imagesForGeneration = [lockedLayoutImage!, currentResultTrimmed]
     } else if (hasLayoutAnchor) {
       imagesForGeneration = [lockedLayoutImage!]
