@@ -2144,10 +2144,7 @@ export function GenerationResults({
     setApiGenerateKind('customize');
     setApiError(null);
     setApiWarning(null);
-    const layoutAnchorImage =
-      roomSession.configMode === 'arrangement'
-        ? currentResultImage
-        : roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage;
+    const layoutAnchorImage = currentResultImage;
     const selectedStyleForApi =
       roomSession.configMode === 'arrangement' ? undefined : selectedStyle;
     const selectedColorPaletteIdForApi =
@@ -2201,6 +2198,7 @@ export function GenerationResults({
     roomSession,
     selectedImageUrl,
     generatedImageUrl,
+    generatedImageRawUrl,
     apiResultImageUrl,
     editMytylesTiles,
     catalogStyleSwatchRows,
@@ -2419,11 +2417,14 @@ export function GenerationResults({
         : 'Do not add extra objects, duplicates, props, or staging elements outside the selected area.';
     const addIntegrationRule =
       'Preserve floor tile/grout/pattern, rug threads, window glass, bars, door openings, and wall texture anywhere they remain visible—not a uniform flat color slab inside the rectangular selection.';
+    const addCompleteObjectRule =
+      'Add one complete, intact object: for a sofa include seat, cushions, back, base/skirt/legs, and solid floor contact—never only the top backrest strip or a floating crop. Scale so the whole piece fits in the box with margin; no flush horizontal slice above the floor.';
     const prompt = [
       `Change only the selected area (${verticalRegion}-${horizontalRegion}) in this interior photo to add: ${addIntent || 'one suitable object'}.`,
       'Keep every other surface, object, layout, and lighting unchanged.',
       placementGuardrail,
       addIntegrationRule,
+      addCompleteObjectRule,
       'Maintain the same camera, geometry, and scene composition; edit only inside the selected mask.',
       'Photorealistic, seamless blend with natural contact shadows and correct perspective.',
     ].join(' ');
@@ -2451,7 +2452,7 @@ export function GenerationResults({
     const maskDataUrl = await createMaskFromBoundingBox(imageDataUrl, bbox, {
       category: addCategory,
       expandGlobalSurface: false,
-      // Feathered boundary matches room-editor add expectations: hides hard billboard edges vs background.
+      addObjectPlacementGrow: true,
       autoFeatherForAdd: true,
     });
     if (!maskDataUrl) {
@@ -2504,7 +2505,7 @@ export function GenerationResults({
           activePrompt = [
             prompt,
             'RETRY REQUIRED: prior output is invalid.',
-            'Place one clearly visible, full 3D object strictly inside the selected mask area.',
+            'Place one clearly visible, complete 3D object strictly inside the selected mask — entire silhouette (e.g. full sofa width, both arms); scale down if needed so nothing is cropped at the mask edge.',
             'Forbidden: solid-color billboard over floor/window tiles, sticker-like rectangle, pastel mat replacing real grout/pattern/glazing.',
             'Where floor or doorway/window pixels show inside the capture box, continue the exact same tiling/grille/daylight—not full-bleed object color.',
             'Ensure natural object shading and shadows while keeping all outside-mask pixels unchanged.',
@@ -2848,10 +2849,7 @@ export function GenerationResults({
     setApiGenerateKind('replace');
     setApiError(null);
     setApiWarning(null);
-    const layoutAnchorImage =
-      roomSession.configMode === 'arrangement'
-        ? currentResultImage
-        : roomSession.imagesDataUrl[roomSession.layoutIndex] ?? currentResultImage;
+    const layoutAnchorImage = currentResultImage;
     const selectedStyleForApi =
       roomSession.configMode === 'arrangement' ? undefined : selectedStyle;
     const selectedColorPaletteIdForApi =
@@ -2919,6 +2917,7 @@ export function GenerationResults({
     repUploadedCompColour,
     repPromptText,
     generatedImageUrl,
+    generatedImageRawUrl,
     apiResultImageUrl,
     onGeneratedImage,
     onGenerationHistoryAppend,
@@ -2943,8 +2942,10 @@ export function GenerationResults({
       setApiError('Image not ready. Wait for the room photo to finish loading.');
       return;
     }
+    // Full-frame mask: an inset (e.g. 2%) left a black border so inpainting never touched edge pixels —
+    // furniture legs, rugs, curtains, and shadows along the frame stayed visible.
     const eraseRegion = useFullComponentsErase
-      ? { x: 0.02, y: 0.02, width: 0.96, height: 0.96 }
+      ? { x: 0, y: 0, width: 1, height: 1 }
       : captureRect
         ? capturePercentRectToEraseRegion(
             panel.offsetWidth,

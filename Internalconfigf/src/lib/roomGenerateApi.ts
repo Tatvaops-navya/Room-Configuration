@@ -309,6 +309,35 @@ function dilateNormalizedRect(
   }
 }
 
+const FLOOR_STANDING_ADD_ELEMENT_TYPES = new Set([
+  'sofa',
+  'chair',
+  'bed',
+  'mattress',
+  'table',
+  'desk',
+  'dining',
+  'cabinet',
+  'carpet',
+  'rug',
+  'lighting',
+  'decor',
+])
+
+function isFloorStandingAddElement(category?: string | null): boolean {
+  if (!category) return false
+  return FLOOR_STANDING_ADD_ELEMENT_TYPES.has(category.toLowerCase())
+}
+
+/** Symmetric dilate + extra bottom height so the mask includes floor contact (avoids “half sofa” crops). */
+function growBoundingBoxForAddObject(box: EraseRegionNormalized, category?: string | null): EraseRegionNormalized {
+  const sym = dilateNormalizedRect(box, 0.1)
+  if (!isFloorStandingAddElement(category)) return sym
+  const dh = Math.min(0.34, Math.max(0.05, box.height * 0.26))
+  const nh = Math.min(1 - sym.y, sym.height + dh)
+  return { x: sym.x, y: sym.y, width: sym.width, height: Math.max(0.02, nh) }
+}
+
 function matchesCategoryGeometry(
   category: string,
   bx: number,
@@ -472,6 +501,13 @@ export type CreateMaskOptions = {
   autoFeatherForAdd?: boolean
   category?: string
   expandGlobalSurface?: boolean
+  /**
+   * Grow the normalized box by this fraction of its own width/height (per side) before painting the mask.
+   * Helps inpaint models fit a whole piece inside the capture area without flush edge truncation.
+   */
+  outwardGrowRatio?: number
+  /** Add-object: smart grow + extra bottom band for seating/tables so legs and seat deck stay inside the mask. */
+  addObjectPlacementGrow?: boolean
 }
 
 /**
@@ -483,14 +519,23 @@ export async function createMaskFromBoundingBox(
   boundingBox: EraseRegionNormalized,
   options?: CreateMaskOptions
 ): Promise<string | null> {
+  let grownBox = boundingBox
+  if (options?.addObjectPlacementGrow) {
+    grownBox = growBoundingBoxForAddObject(boundingBox, options?.category)
+  } else {
+    const grow = options?.outwardGrowRatio
+    if (typeof grow === 'number' && grow > 0 && grow < 0.5) {
+      grownBox = dilateNormalizedRect(grownBox, grow)
+    }
+  }
   const effectiveBox =
     options?.expandGlobalSurface && isGlobalSurfaceCategory(options?.category)
       ? await expandMaskBasedOnCategory(
-          boundingBox,
+          grownBox,
           imageDataUrl,
           String(options?.category)
         )
-      : boundingBox
+      : grownBox
   return new Promise((resolve) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
@@ -518,8 +563,8 @@ export async function createMaskFromBoundingBox(
       let feather = options?.featherPx
       if (feather === undefined && options?.autoFeatherForAdd) {
         const m = Math.min(w, h)
-        // Keep a moderate feather: enough to hide hard seams, but not so large that the object fades away.
-        feather = Math.max(6, Math.min(20, Math.round(m * 0.008)))
+        // Thin feather: softens a hard rectangle without widening a band where cleanup/composite errors show.
+        feather = Math.max(3, Math.min(8, Math.round(m * 0.005)))
       }
       if (feather != null && feather > 0) {
         const blur = Math.min(Math.round(feather), 64)

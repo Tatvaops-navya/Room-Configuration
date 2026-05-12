@@ -12,6 +12,34 @@ function resolveGeminiImageTimeoutMs(): number {
   if (Number.isFinite(raw) && raw >= 60_000 && raw <= 600_000) return raw
   return 300_000
 }
+
+const GEMINI_INPAINT_TRANSIENT_HTTP = new Set([429, 503])
+
+function normalizeGeminiModelId(model: string): string {
+  return model.replace(/^models\//, '').trim()
+}
+
+/** Flash / image-generation ids need modalities or the API returns text-only. */
+function inpaintGenerationConfig(model: string): { temperature: number; responseModalities?: string[] } {
+  const m = normalizeGeminiModelId(model).toLowerCase()
+  const needsModalities =
+    m.includes('flash-image') || m.includes('image-generation') || m === 'gemini-2.5-flash-image'
+  if (needsModalities) return { temperature: 0, responseModalities: ['TEXT', 'IMAGE'] }
+  return { temperature: 0 }
+}
+
+function resolveInpaintFallbackModel(primary: string): string | null {
+  const configured = process.env.GEMINI_FALLBACK_IMAGE_MODEL?.trim()
+  const defaultFb = 'gemini-3.1-flash-image-preview'
+  const candidate = normalizeGeminiModelId(configured || defaultFb)
+  const p = normalizeGeminiModelId(primary)
+  if (!candidate || candidate === p) return null
+  return candidate
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
 const DESIGN_CONTEXT =
   'Context: Professional interior/exterior design and room configuration visualization. All content is for design purposes only.\n\n'
 const NO_LOGO =
@@ -35,7 +63,16 @@ export async function compositeAddOutputOntoSource(
   outputDataUrl: string,
   sourceDataUrl: string,
   maskDataUrl: string,
-  options?: { hardMask?: boolean }
+  options?: {
+    hardMask?: boolean
+    /**
+     * Add-object: default composite pulls toward source at soft-mask edges (pow 1.55), which can
+     * clip arms/cushions at the capture rectangle. Use a gentler curve so the full silhouette survives feathered masks.
+     */
+    preserveAddSilhouette?: boolean
+    /** If set, overrides gamma in Math.pow(maskLuma, gamma) for soft masks (default 1.55, or 1.12 when preserveAdd). */
+    edgeBlendGamma?: number
+  }
 ): Promise<string | null> {
   try {
     const out = parseDataUrl(outputDataUrl)
@@ -59,11 +96,18 @@ export async function compositeAddOutputOntoSource(
     const pixels = width * height
     const dst = Buffer.alloc(pixels * 3)
     const hardMask = !!options?.hardMask
+    const preserveAdd = !!options?.preserveAddSilhouette
+    const gamma =
+      typeof options?.edgeBlendGamma === 'number' && options.edgeBlendGamma > 0
+        ? options.edgeBlendGamma
+        : preserveAdd
+          ? 1.12
+          : 1.55
     /** Feathered masks + full-frame model output: linear alpha leaves a wide “double exposure” band. Bias edge alphas toward source. */
     const compositeAlpha = (luma01: number) => {
       const t = Math.max(0, Math.min(1, luma01))
       if (hardMask) return t >= 0.5 ? 1 : 0
-      return Math.pow(t, 1.55)
+      return Math.pow(t, gamma)
     }
     for (let p = 0; p < pixels; p++) {
       const i = p * 3
@@ -533,8 +577,23 @@ async function cleanAddWhiteArtifactPixels(
           spread <= 28 &&
           outLuma - srcLuma >= 18 &&
           !(sr >= 228 && sg >= 228 && sb >= 228)
+        /**
+         * Only strip *true* near-white mat pixels in the feather ring. Loose luma thresholds were
+         * restoring floor tiles onto light beige sofa cushions / seat decks (half-sofa look).
+         */
+        const maskLumaForPixel = maskLuma
+        const inFeatherOrSoftEdge = maskLumaForPixel >= 28 && maskLumaForPixel <= 220
+        const outIsNearWhiteRgb = or >= 232 && og >= 232 && ob >= 232
+        const featherWhiteHalo =
+          inFeatherOrSoftEdge &&
+          outIsNearWhiteRgb &&
+          outLuma >= 228 &&
+          spread <= 22 &&
+          srcLuma <= 235 &&
+          outLuma - srcLuma >= 18 &&
+          !(sr >= 232 && sg >= 232 && sb >= 232)
 
-        if ((outIsWhitePatch && srcIsNotWhite) || suspiciousStudioFloorPixel) {
+        if ((outIsWhitePatch && srcIsNotWhite) || suspiciousStudioFloorPixel || featherWhiteHalo) {
           outRaw[i] = sr
           outRaw[i + 1] = sg
           outRaw[i + 2] = sb
@@ -614,7 +673,7 @@ export async function runGeminiMaskedInpaint(
         text:
           operation === 'replace'
             ? 'REFERENCE — USER-SELECTED CATALOG ITEM FOR REPLACE (strict): The next image is the exact product the user chose. In the white masked region, fully remove old content and render ONLY this selected item in-scene (same design, silhouette, parts, materials, and colors). IMPORTANT: ignore plain/white/neutral reference backgrounds; use object pixels only. FORBIDDEN: pasted catalog card, white/gray rectangle, sticker-like cutout, or additive layering over old object. Output must be a true photoreal replacement integrated with room lighting/perspective and floor/rug continuity.'
-            : 'REFERENCE — USER-SELECTED CATALOG ITEM (strict): The next image is the exact product or tile the user chose. Reproduce only that item inside the bright masked region of the FIRST room photograph: same design, shape, number of parts, materials, and colors — not a different SKU and not a “similar” or upgraded alternative. IMPORTANT: treat any plain/white/neutral background in the reference as non-object pixels to ignore; extract and use ONLY the object itself (its silhouette + materials). Do not add companion objects, extra accessories, plants, additional lamps, side tables, duplicate units, or decorative groupings unless they are clearly part of the same single product in the reference (e.g. a photographed set). For wall/floor tile references, match that pattern only — no extra borders or mixed patterns. Re-render in the room’s camera angle, perspective, scale, and lighting — fully integrated in 3D with correct contact shadow and floor/rug continuity. Do not paste the reference as a flat layer; do not output a white or gray studio card behind it; the result must look photographed in the same scene as the room.',
+            : 'REFERENCE — USER-SELECTED CATALOG ITEM (strict): The next image is the exact product or tile the user chose. Reproduce only that item inside the bright masked region of the FIRST room photograph: same design, shape, number of parts, materials, and colors — not a different SKU and not a “similar” or upgraded alternative. For sofas/chairs/beds: preserve the full width and both sides of the piece in-scene (scale down if needed) — never crop one arm or half the seating. IMPORTANT: treat any plain/white/neutral background in the reference as non-object pixels to ignore; extract and use ONLY the object itself (its silhouette + materials). Do not add companion objects, extra accessories, plants, additional lamps, side tables, duplicate units, or decorative groupings unless they are clearly part of the same single product in the reference (e.g. a photographed set). For wall/floor tile references, match that pattern only — no extra borders or mixed patterns. Re-render in the room’s camera angle, perspective, scale, and lighting — fully integrated in 3D with correct contact shadow and floor/rug continuity. Do not paste the reference as a flat layer; do not output a white or gray studio card behind it; the result must look photographed in the same scene as the room.',
       })
       referenceParts.push({
         inlineData: { data: refParsed.data, mimeType: refParsed.mimeType },
@@ -627,17 +686,24 @@ export async function runGeminiMaskedInpaint(
     return { ok: false, error: 'Image generation API key is not configured', status: 500 }
   }
 
-  const addPrompt = `${DESIGN_CONTEXT}${NO_LOGO}ADD-OBJECT — NATIVE 3D IN SCENE (NOT A PASTE): You receive (1) one interior photograph and (2) a mask on the same pixel grid. Output must be ONE photograph — as if the camera captured the room with the new object already there.
+  const addPrompt = `${DESIGN_CONTEXT}${NO_LOGO}INPAINTING TASK (same contract as EDIT): You are given two images. The FIRST is the room photograph. The SECOND is a mask — white = region you may change, black = must stay pixel-identical to the first image. MODIFY ONLY the white region to add what the user asked for (and match any reference product). Same canvas size and framing; no edits outside the mask. No text or logos in the output.
+
+ADD-OBJECT — NATIVE 3D IN SCENE (NOT A PASTE): Output one photograph as if the camera captured the room with the new object already there.
+
+COMPLETE OBJECT — NO “HALF FURNITURE” (MANDATORY — SAME QUALITY BAR AS REPLACE/EDIT):
+• Render the **entire** product as **one intact piece**. For seating: **both arms**, full seat run, **seat deck**, **cushions**, **backrest**, **skirt or legs**, and **full contact with the floor plane** — **never** output only the upper back strip; **never** crop the bottom so the sofa appears to float or end in a horizontal slice above the tiles.
+• **Scale, position, and perspective** so the **full silhouette fits inside the white mask** with a small margin from the rectangle border. If the reference is a wide sofa, **shrink proportionally** so the **whole** piece fits — **FORBIDDEN:** one missing arm, half-width cushion row, or “sliced” side that looks like the object continued past the frame.
+• The mask is an edit boundary for pixels, not permission to crop the product: the viewer must see a **complete, believable** object, not a fragment.
 
 HARD REGION RULES (NON-NEGOTIABLE):
-• Place the object strictly inside the selected region only (bright / white mask). The new object’s visible pixels must lie inside that region in image coordinates.
-• Do not modify any area outside the selected region — outside the mask must remain pixel-identical to the first photograph.
-• Do not remove or alter existing objects outside the selection. Do not replace the entire image or repaint the whole room.
+• All **new** object pixels must lie inside the white mask; unchanged areas outside stay identical to the first photograph.
+• Do not remove or alter existing room content outside the selection. Do not replace the entire image or repaint the whole room.
 
 FORBIDDEN — “PRODUCT PHOTO” OR STICKER COMPOSITES:
 • NEVER paste a rectangular picture of furniture with a white, light gray, cream, or solid studio backdrop behind it.
 • NEVER output a flat front-on catalog / e-commerce cutout floating in the room.
 • NEVER surround the object with a visible rectangle, card, panel, or uniform fill that is not real architecture.
+• NEVER add a white, off-white, or blown-highlight border, frame, outline, or glow around the object or along the selection rectangle — the object must meet walls/stairs/floor with zero light mat or cardboard edge (same standard as EDIT inpainting).
 • The bookshelf, plant, lamp, etc. must be RE-RENDERED in the room’s own camera angle, perspective, and vanishing points — volumetric, lit like the rest of the scene, not a 2D layer.
 
 PHOTOREAL INTEGRATION (REQUIRED):
@@ -666,10 +732,10 @@ FLOOR LINE — NO WHITE MAT / STRIP (CRITICAL):
 • The real floor from the photograph (tile pattern, grout, wood planks, carpet/rug texture) must continue seamlessly under and around the object’s base inside the mask — same hue, noise, and perspective as adjacent visible floor.
 • Any kick plate or plinth on the furniture must be stained wood, painted trim, or metal matching the unit — not pure white unless the room’s trim is actually white and continuous with surroundings.
 
-SOFAS / CHAIRS ON PATTERNED FLOOR OR TILE (CRITICAL — NO FULL-BLEED BILLBOARD):
-• The selection box is only a GUIDE for placement—not a billboard to repaint. Everywhere inside the rectangle that shows **floor**, **open doorway/outside light**, **window glazing, bars/grilles, sill, reflections**, OR **distinct wall plaster** MUST stay tied to **the SAME pixels/details as the FIRST photo** wherever the furniture does not genuinely occlude them.
-• A sofa skirt, frame, cushions, pillows, legs, arms, tufting, and cast shadows are allowed to change—but you MUST preserve local floor/window/door realism in exposed zones: patterned tiles keep their pattern continuity; barred windows remain visible translucent glass with daylight — NOT flattened to a solid upholstered color slab.
-• If part of an open doorway or window falls inside the white mask but is **visible around** the silhouette of the couch, KEEP that outdoor light and architecture—do NOT smear upholstery yellow (or any object color) over it as one opaque rectangle.
+SOFAS / CHAIRS — FULL VOLUME + REAL BACKGROUND IN GAPS (CRITICAL):
+• Still output a **complete** sofa/chair (both ends, full width). Do **not** delete an arm or half the seat to “save” window pixels.
+• Where floor, rug, glazing, doorway, or wall is **visible between legs, under skirts, or beside arms**, keep **that** narrow zone tied to the first photo (pattern, daylight, grilles) — not one solid upholstery slab over the whole box.
+• Between arms and above seat, window/wall may show through **only where geometry truly allows**; do not paint a flat object-colored rectangle over the entire mask.
 
 SPATIAL RULE — USER BOX ONLY:
 • Bright mask = only region where pixels may change. The object’s footprint on the floor must fall inside that rectangle in image coordinates.
@@ -751,15 +817,14 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
 
   const maskCaption =
     operation === 'add'
-      ? 'Mask: bright = selected region ONLY. Place the object strictly inside this region. Do not modify any area outside the bright region — keep those pixels identical to the first image. Synthesize in full 3D scene perspective — not a flat product image on white. Continue existing rug/floor texture under the object; no halo or double floor pattern at the mask edge; contact shadow matches room lighting.'
+      ? 'Mask: white = editable region only (black = unchanged). Add the full object inside white: entire silhouette, scaled to fit with a thin margin — no truncated arm or half seat. Outside white = identical to first image. Full 3D perspective; continue floor/rug under the base; no flat catalog card; contact shadows match room light.'
       : operation === 'replace'
         ? 'Mask: white = region to fully repaint. Remove old content there completely — single layer, no stacked objects. Black = unchanged pixels.'
         : 'Mask (white = region to modify):'
 
-  const model = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+  const primaryModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
 
-  const buildBody = (extraText?: string) =>
+  const buildBody = (modelForConfig: string, extraText?: string) =>
     JSON.stringify({
       contents: [
         {
@@ -773,7 +838,7 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
             ...(operation === 'add'
               ? [
                   {
-                    text: 'Last checks: (1) Object strictly inside the bright mask only. (2) Pixels outside the mask unchanged. (3) No white/gray studio card behind the object. (4) Floor/rug texture continues naturally under the base — no rug-to-tile swap. (5) No halo, ghost edge, or duplicated floor pattern at the mask boundary. (6) Contact shadow + speculars match the room’s existing light. (7) Full 3D integration — not a pasted flat cutout. (8) If a reference product image was supplied: only that selected item — no extra objects, duplicates, or invented accessories.',
+                    text: 'Last checks: (1) Complete object inside white mask — both arms / full width for sofas and chairs; no vertical slice at mask border. (2) Pixels outside mask unchanged. (3) No studio card, sticker, or white rectangular outline around the object. (4) Floor/rug under base continues naturally. (5) No halo, light ring, or double floor at edge. (6) Shadows and highlights match room. (7) True 3D integration. (8) Reference = that item only, no extras.',
                   },
                 ]
               : operation === 'replace'
@@ -787,14 +852,18 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
           ],
         },
       ],
-      generationConfig: { temperature: 0 },
+      generationConfig: inpaintGenerationConfig(modelForConfig),
     })
 
   try {
-    const callModel = async (extraText?: string): Promise<{ imageUrl: string | null; error?: string; status?: number }> => {
-      const body = buildBody(extraText)
+    const callGeminiInpaintOnce = async (
+      modelName: string,
+      extraText?: string
+    ): Promise<{ imageUrl: string | null; error?: string; status?: number }> => {
+      const m = normalizeGeminiModelId(modelName)
+      const body = buildBody(m, extraText)
       const res = await fetchGemini(
-        url,
+        `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
         resolveGeminiImageTimeoutMs()
       )
@@ -819,6 +888,44 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
       return { imageUrl: toDataUrl(mime, part.inlineData.data) }
     }
 
+    const callModel = async (extraText?: string): Promise<{ imageUrl: string | null; error?: string; status?: number }> => {
+      let last: { imageUrl: string | null; error?: string; status?: number } = {
+        imageUrl: null,
+        error: 'Image generation failed',
+        status: 502,
+      }
+      const primaryAttempts = 3
+      for (let a = 0; a < primaryAttempts; a++) {
+        const r = await callGeminiInpaintOnce(primaryModel, extraText)
+        if (r.imageUrl) return r
+        last = r
+        const st = r.status ?? 0
+        if (GEMINI_INPAINT_TRANSIENT_HTTP.has(st) && a < primaryAttempts - 1) {
+          console.warn(`Gemini inpaint HTTP ${st} (model ${normalizeGeminiModelId(primaryModel)}), retry ${a + 2}/${primaryAttempts}…`)
+          await sleepMs(1200 * (a + 1))
+          continue
+        }
+        break
+      }
+      const fb = resolveInpaintFallbackModel(primaryModel)
+      const st = last.status ?? 0
+      if (fb && (GEMINI_INPAINT_TRANSIENT_HTTP.has(st) || st === 502)) {
+        console.warn(`Gemini inpaint: primary failed (${st}), trying fallback ${fb}.`)
+        for (let a = 0; a < 2; a++) {
+          const r = await callGeminiInpaintOnce(fb, extraText)
+          if (r.imageUrl) return r
+          last = r
+          const st2 = r.status ?? 0
+          if (GEMINI_INPAINT_TRANSIENT_HTTP.has(st2) && a < 1) {
+            await sleepMs(2000)
+            continue
+          }
+          break
+        }
+      }
+      return last
+    }
+
     const first = await callModel()
     if (!first.imageUrl) {
       return { ok: false, error: first.error || 'Image generation failed', status: first.status || 502 }
@@ -829,6 +936,9 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
         // Soft-edge compositing prevents visible split lines at mask boundary.
         const composited = await compositeAddOutputOntoSource(rawOutputUrl, imageDataUrl, maskDataUrl, {
           hardMask: false,
+          preserveAddSilhouette: false,
+          // Between edit (1.55) and old add-soft (1.12): keeps more object at the rim than 1.55, less white mat than 1.12.
+          ...(operation === 'add' ? { edgeBlendGamma: 1.28 } : {}),
         })
         return composited ?? rawOutputUrl
       }
@@ -864,7 +974,7 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
           const retry = await callModel(
             addTooBroad
               ? 'RETRY FIX REQUIRED: previous output repainted too much of the selected box. Add only one object; do not flood-fill the rectangle. Preserve floor/window/door details anywhere not physically occluded by the new object.'
-              : 'RETRY FIX REQUIRED: added object is too weak/partial. Place one clearly visible full 3D object inside the white mask with proper perspective and contact shadows, while preserving surrounding room details.'
+              : 'RETRY FIX REQUIRED: previous add is weak, partial, or truncated. Render ONE complete piece (e.g. sofa: both arms, seat deck, cushions, back, skirt/legs, full floor contact — not a top-only backrest strip) scaled to fit inside the white mask with margin — never a horizontal slice above the floor. Full 3D, contact shadow; black mask identical to source.'
           )
           if (retry.imageUrl) {
             workingUrl = await processMaskedOutput(retry.imageUrl)
@@ -888,7 +998,7 @@ User instructions: ${userPrompt || 'Replace with one object that fits the room; 
       if (artifact || flatCard || addLooksLikeFlatBillboard) {
         const retry = await callModel(
           artifact || flatCard
-            ? 'RETRY FIX REQUIRED: previous output looks like a pasted product card / sticker (flat, near-uniform patch) in the masked area. Repaint the region photorealistically in-scene with NO white/gray studio backdrop, NO flat cutout, and NO rectangular panel. Keep all pixels outside the black/unchanged mask identical to the first image.'
+            ? 'RETRY FIX REQUIRED: previous output looks like a pasted product card / sticker (flat, near-uniform patch) or has a visible white/light border around the object. Repaint photorealistically in-scene with NO white/gray studio backdrop, NO flat cutout, NO rectangular panel, and NO glowing outline at the mask edge. Keep all pixels outside the black/unchanged mask identical to the first image.'
             : 'RETRY FIX REQUIRED — MASKED ZONE STILL “POSTER BOARD”: The editable region lacks real scene texture—it reads as one flat tinted layer instead of wallpaper/floor glazing/door daylight continuing behind and between furniture silhouette. Fully re-render INSIDE WHITE ONLY: reconstruct the SAME floor pattern and grout/reflection continuity under legs and skirts; barred windows/transom/door openings keep real transparency and grille geometry where visible; upholstered pieces get real 3D volume, shading, tufted seams, shadows—NOT uniform paint over the rectangle. Forbidden: billboard fill, solid color card over tiling or glazing. Black mask untouched.'
         )
         if (retry.imageUrl) {

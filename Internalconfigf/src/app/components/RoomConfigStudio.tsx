@@ -124,6 +124,7 @@ export function RoomConfigStudio({
   const [selectedConfigMode, setSelectedConfigMode] = useState<'purpose' | 'arrangement'>('purpose');
   const [styleCategoryTab, setStyleCategoryTab] = useState<RegionalStyleCategoryId>('indian');
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
+  const [styleThumbStatus, setStyleThumbStatus] = useState<Record<string, 'loaded' | 'error'>>({});
   const [selectedPalette, setSelectedPalette] = useState<string | null>(null);
   const [hoveredPalette,  setHoveredPalette]  = useState<string | null>(null);
   const [wizardSubmitting, setWizardSubmitting] = useState(false);
@@ -136,6 +137,9 @@ export function RoomConfigStudio({
   const [preferenceAdditionalNotes, setPreferenceAdditionalNotes] = useState('');
   const [preferenceReferenceImages, setPreferenceReferenceImages] = useState<string[]>([]);
   const preferenceRefInputRef = useRef<HTMLInputElement | null>(null);
+  /** Custom components: reference upload + generate happen on the upload step (no separate preferences screen). */
+  const submitPreferencesWizardRef = useRef<() => Promise<void>>(async () => {});
+  const preferencesWizardSubmitLockRef = useRef(false);
 
   const uploadedImages    = activeModal === 'internal' ? internalImages : externalImages;
   const setUploadedImages = activeModal === 'internal' ? setInternalImages : setExternalImages;
@@ -148,6 +152,13 @@ export function RoomConfigStudio({
     () => REGIONAL_STYLES.filter((s) => s.category === styleCategoryTab),
     [styleCategoryTab],
   );
+  const getStyleInitials = (name: string) =>
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? '')
+      .join('');
 
   const minImages = 1;
   const maxImages = ROOM_UPLOAD_SLOTS;
@@ -183,6 +194,7 @@ export function RoomConfigStudio({
     setModalStep('configMode');
     setSelectedConfigMode('purpose');
     setSelectedStyleId(null);
+    setStyleThumbStatus({});
     setStyleCategoryTab('indian');
     setSelectedPalette(null);
     setImageTypeValidation(null);
@@ -191,6 +203,7 @@ export function RoomConfigStudio({
     setExternalRoomContext('');
     setPreferenceAdditionalNotes('');
     setPreferenceReferenceImages([]);
+    preferencesWizardSubmitLockRef.current = false;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
   };
 
@@ -229,6 +242,7 @@ export function RoomConfigStudio({
     const remaining = Math.max(0, 6 - preferenceReferenceImages.length);
     if (remaining <= 0) return;
     const nextUrls = files.slice(0, remaining).map((f) => URL.createObjectURL(f));
+    if (nextUrls.length === 0) return;
     setPreferenceReferenceImages((prev) => [...prev, ...nextUrls]);
     // allow selecting same file again
     e.target.value = '';
@@ -405,7 +419,7 @@ export function RoomConfigStudio({
         setPreferenceAdditionalNotes(session.additionalNotes ?? '');
         setPreferenceReferenceImages(session.optionalReferenceImages ?? []);
       }
-      setModalStep('preferences');
+      setModalStep(session && session.configMode === 'arrangement' ? 'upload' : 'preferences');
     }
   }, [returnToPreferences, activeModal, initialSession]);
 
@@ -421,13 +435,10 @@ export function RoomConfigStudio({
       if (modalStep === 'configMode') {
         setModalStep('upload');
       } else if (modalStep === 'upload') {
-        if (selectedConfigMode === 'arrangement') {
-          setSelectedStyleId(null);
-          setSelectedPalette(null);
-          setModalStep('preferences');
-        } else {
+        if (selectedConfigMode !== 'arrangement') {
           setModalStep('styleSelect');
         }
+        // Custom components: stay on upload (reference images + generate live there).
       } else if (modalStep === 'styleSelect') {
         setModalStep('paletteSelect');
       } else if (modalStep === 'paletteSelect') {
@@ -457,6 +468,71 @@ export function RoomConfigStudio({
     onStepNavigate?.(() => nextStepHandler);
     onBackNavigate?.(() => backStepHandler);
   }, [activeModal, modalStep, selectedConfigMode, onStepNavigate, onBackNavigate]);
+
+  /** Keep latest wizard completion logic (shared by full-room preferences + custom-components upload step). */
+  submitPreferencesWizardRef.current = async () => {
+    if (preferencesWizardSubmitLockRef.current) return;
+    preferencesWizardSubmitLockRef.current = true;
+    setWizardSubmitError(null);
+    try {
+      const slots = uploadedImages
+        .map((u, i) => ({ u, i }))
+        .filter((x): x is { u: string; i: number } => x.u != null && x.u !== '');
+      const blobUrls = slots.map((x) => x.u);
+      const layoutIdx =
+        selectedImage !== null && uploadedImages[selectedImage]
+          ? slots.findIndex((s) => s.i === selectedImage)
+          : 0;
+      const safeLayout = layoutIdx >= 0 ? layoutIdx : 0;
+      const configType = activeModal === 'external' ? 'external' : 'internal';
+      const ctx = configType === 'external' ? externalRoomContext.trim() : internalRoomContext.trim();
+      const notes = preferenceAdditionalNotes.trim();
+      const arrangementPreferencesText =
+        notes ||
+        ctx ||
+        'Create a practical component-based arrangement with balanced spacing and clear circulation.';
+      const payload: RoomWizardCompletePayload = {
+        blobUrls,
+        configMode: selectedConfigMode,
+        ...(selectedConfigMode === 'arrangement' ? { omitWizardStyleAndPalette: true } : {}),
+        ...(preferenceReferenceImages.length > 0 ? { referenceImageBlobUrls: preferenceReferenceImages } : {}),
+        layoutIndex: safeLayout,
+        style:
+          selectedConfigMode === 'arrangement' ? '' : selectedRegionalStyle?.name ?? DEFAULT_REGIONAL_STYLE_NAME,
+        paletteName: selectedConfigMode === 'arrangement' ? null : selectedPalette,
+        configType,
+        ...(selectedConfigMode === 'arrangement'
+          ? {
+              arrangementConfig: {
+                existingComponentsNote:
+                  'Preserve major existing components and spatial anchors from the selected layout image unless user preferences indicate changes.',
+                removedComponentsNote: '',
+                newComponentsNote:
+                  preferenceReferenceImages.length > 0
+                    ? 'Add new components inspired by the provided reference images where appropriate.'
+                    : 'Add suitable components to complete the room arrangement.',
+                arrangementPreferencesText,
+              },
+            }
+          : {}),
+        ...(ctx ? { roomContext: ctx } : {}),
+        ...(notes ? { additionalNotes: notes } : {}),
+      };
+      setWizardSubmitting(true);
+      try {
+        await onComplete?.(payload);
+        handleCloseModal();
+      } catch (err) {
+        setWizardSubmitError(
+          err instanceof Error ? err.message : 'Generation failed. Check Next.js is running and try again.'
+        );
+      } finally {
+        setWizardSubmitting(false);
+      }
+    } finally {
+      preferencesWizardSubmitLockRef.current = false;
+    }
+  };
 
   /** Figma-style glass panel: #121214 @ 82% + inner highlight rings */
   const glassCardStyle = {
@@ -994,6 +1070,14 @@ export function RoomConfigStudio({
               overflowY:            'auto',
             }}
           >
+            <input
+              ref={preferenceRefInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handlePreferenceReferenceUpload}
+            />
 
             {/* ══ STEP 2 — UPLOAD & LOCK LAYOUT ═══════════════════ */}
             {modalStep === 'upload' && (
@@ -1231,8 +1315,129 @@ export function RoomConfigStudio({
                   </div>
                 )}
 
+                {selectedConfigMode === 'arrangement' && canProceedFromUpload && (
+                  <div
+                    style={{
+                      padding: isMobile ? '12px 16px 0' : '16px 32px 0',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '12px',
+                      borderTop: '1px solid rgba(255,255,255,0.08)',
+                      marginTop: '8px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}>
+                        Reference images
+                      </div>
+                      <p style={{ margin: '6px 0 0', fontFamily: "'Inter', sans-serif", fontSize: '12px', fontWeight: 400, color: 'rgba(255,255,255,0.45)', lineHeight: 1.55 }}>
+                        Add component or style references, then tap Generate & Configure below.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => preferenceRefInputRef.current?.click()}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '12px 20px',
+                        borderRadius: '10px',
+                        background: 'rgba(0,0,0,0.45)',
+                        border: '1px solid rgba(255,255,255,0.18)',
+                        cursor: 'pointer',
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: 'rgba(255,255,255,0.92)',
+                        transition: 'all 180ms ease',
+                        alignSelf: 'flex-start',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(0,0,0,0.55)';
+                        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.28)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(0,0,0,0.45)';
+                        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.18)';
+                      }}
+                    >
+                      <Upload size={16} style={{ color: 'inherit' }} />
+                      Upload Reference Images
+                    </button>
+                    {preferenceReferenceImages.length > 0 && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
+                        {preferenceReferenceImages.map((src, i) => (
+                          <div
+                            key={`${src}-${i}`}
+                            style={{ position: 'relative', borderRadius: '10px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.12)' }}
+                          >
+                            <img src={src} alt={`Reference ${i + 1}`} style={{ width: '100%', height: '92px', objectFit: 'cover', display: 'block' }} />
+                            <button
+                              type="button"
+                              onClick={() => removePreferenceReferenceImage(i)}
+                              style={{
+                                position: 'absolute',
+                                top: 6,
+                                right: 6,
+                                width: 20,
+                                height: 20,
+                                borderRadius: 999,
+                                border: '1px solid rgba(255,255,255,0.35)',
+                                background: 'rgba(0,0,0,0.55)',
+                                color: '#fff',
+                                cursor: 'pointer',
+                                fontSize: 12,
+                                lineHeight: '18px',
+                                textAlign: 'center',
+                                padding: 0,
+                              }}
+                              title="Remove reference"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Footer */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', padding: '12px 32px 16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '10px', padding: '12px 32px 16px' }}>
+                  {wizardSubmitError && selectedConfigMode === 'arrangement' && (
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        background: 'rgba(180,60,60,0.2)',
+                        border: '1px solid rgba(255,120,120,0.35)',
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: '12px',
+                        color: 'rgba(255,210,210,0.95)',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {wizardSubmitError}
+                    </div>
+                  )}
+                  {wizardSubmitting && selectedConfigMode === 'arrangement' && (
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.10)',
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: '12px',
+                        color: 'rgba(255,255,255,0.75)',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      Starting configuration…
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px' }}>
                   <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '11.5px', fontWeight: 400, color: 'rgba(255,255,255,0.28)', marginRight: 'auto' }}>
                     {filledCount} / {maxImages} uploaded
                   </span>
@@ -1245,21 +1450,26 @@ export function RoomConfigStudio({
                     Cancel
                   </button>
                   <button
-                    disabled={!canProceedFromUpload}
+                    disabled={!canProceedFromUpload || (selectedConfigMode === 'arrangement' && wizardSubmitting)}
                     onClick={() => {
                       if (!canProceedFromUpload) return;
                       if (selectedConfigMode === 'arrangement') {
                         setSelectedStyleId(null);
                         setSelectedPalette(null);
-                        setModalStep('preferences');
-                      } else {
-                        setModalStep('styleSelect');
+                        void submitPreferencesWizardRef.current();
+                        return;
                       }
+                      setModalStep('styleSelect');
                     }}
-                    style={{ height: '40px', padding: '0 26px', borderRadius: '10px', background: canProceedFromUpload ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.04)', border: canProceedFromUpload ? '1.5px solid rgba(255,255,255,0.80)' : '1px solid rgba(255,255,255,0.08)', boxShadow: canProceedFromUpload ? '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)' : 'none', cursor: canProceedFromUpload ? 'pointer' : 'not-allowed', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: canProceedFromUpload ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)', transition: 'all 200ms ease', opacity: canProceedFromUpload ? 1 : 0.55 }}
+                    style={{ height: '40px', padding: '0 26px', borderRadius: '10px', background: canProceedFromUpload && !(selectedConfigMode === 'arrangement' && wizardSubmitting) ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.04)', border: canProceedFromUpload && !(selectedConfigMode === 'arrangement' && wizardSubmitting) ? '1.5px solid rgba(255,255,255,0.80)' : '1px solid rgba(255,255,255,0.08)', boxShadow: canProceedFromUpload && !(selectedConfigMode === 'arrangement' && wizardSubmitting) ? '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)' : 'none', cursor: canProceedFromUpload && !(selectedConfigMode === 'arrangement' && wizardSubmitting) ? 'pointer' : 'not-allowed', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: canProceedFromUpload && !(selectedConfigMode === 'arrangement' && wizardSubmitting) ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.22)', transition: 'all 200ms ease', opacity: canProceedFromUpload && !(selectedConfigMode === 'arrangement' && wizardSubmitting) ? 1 : 0.55 }}
                   >
-                    Continue
+                    {selectedConfigMode === 'arrangement'
+                      ? wizardSubmitting
+                        ? 'Preparing…'
+                        : 'Generate & Configure'
+                      : 'Continue'}
                   </button>
+                  </div>
                 </div>
               </>
             )}
@@ -1458,17 +1668,63 @@ export function RoomConfigStudio({
                           borderRadius: isMobile ? '16px' : '50%',
                           overflow:     'hidden',
                           flexShrink:   0,
+                          position:     'relative',
+                          background:   style.gradient,
                           border:       isSel
                             ? '2px solid rgba(255,255,255,0.82)'
                             : '1.5px solid rgba(255,255,255,0.18)',
                           boxShadow:    isSel ? '0 0 14px rgba(255,255,255,0.28)' : 'none',
                           transition:   'all 180ms ease',
                         }}>
+                          {styleThumbStatus[style.id] !== 'loaded' && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                inset: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: 'rgba(0,0,0,0.16)',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontFamily: "'Inter', sans-serif",
+                                  fontSize: isMobile ? '12px' : '11px',
+                                  fontWeight: 600,
+                                  letterSpacing: '0.06em',
+                                  color: 'rgba(255,255,255,0.75)',
+                                  textTransform: 'uppercase',
+                                }}
+                              >
+                                {getStyleInitials(style.name)}
+                              </span>
+                            </div>
+                          )}
                           <img
                             src={style.img}
                             alt={style.name}
                             loading="lazy"
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                            onLoad={() =>
+                              setStyleThumbStatus((prev) => {
+                                if (prev[style.id] === 'loaded') return prev;
+                                return { ...prev, [style.id]: 'loaded' };
+                              })
+                            }
+                            onError={() =>
+                              setStyleThumbStatus((prev) => {
+                                if (prev[style.id] === 'error') return prev;
+                                return { ...prev, [style.id]: 'error' };
+                              })
+                            }
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              display: 'block',
+                              opacity: styleThumbStatus[style.id] === 'loaded' ? 1 : 0,
+                              transition: 'opacity 220ms ease',
+                            }}
                           />
                         </div>
 
@@ -1660,8 +1916,8 @@ export function RoomConfigStudio({
               </>
             )}
 
-            {/* ══ STEP 5 — PREFERENCES ═══════════════════════ */}
-            {modalStep === 'preferences' && (
+            {/* ══ STEP 5 — PREFERENCES (full-room only; custom components use upload step) ═══════════════════════ */}
+            {modalStep === 'preferences' && selectedConfigMode !== 'arrangement' && (
               <>
                 {/* Header */}
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '16px 32px 0' }}>
@@ -1685,15 +1941,7 @@ export function RoomConfigStudio({
 
                 {/* Content area */}
                 <div style={{ flex: 1, minHeight: 0, padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
-                  {/* Upload Reference Images Button */}
-                  <input
-                    ref={preferenceRefInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    style={{ display: 'none' }}
-                    onChange={handlePreferenceReferenceUpload}
-                  />
+                  {/* Upload Reference Images — hidden file input lives at modal root */}
                   <button
                     type="button"
                     onClick={() => preferenceRefInputRef.current?.click()}
@@ -1743,7 +1991,7 @@ export function RoomConfigStudio({
                     </div>
                   )}
 
-                  {/* Additional Notes Section */}
+                  {/* Additional Notes (full-room preferences only) */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     <label style={{ fontFamily: "'Inter', sans-serif", fontSize: '16px', fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>
                       Additional Notes
@@ -1805,9 +2053,7 @@ export function RoomConfigStudio({
                     <button
                       type="button"
                       disabled={wizardSubmitting}
-                      onClick={() =>
-                        setModalStep(selectedConfigMode === 'arrangement' ? 'upload' : 'paletteSelect')
-                      }
+                      onClick={() => setModalStep('paletteSelect')}
                       style={{ height: '40px', padding: '0 22px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', cursor: wizardSubmitting ? 'not-allowed' : 'pointer', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.62)', transition: 'all 180ms ease', opacity: wizardSubmitting ? 0.5 : 1 }}
                       onMouseEnter={e => { if (wizardSubmitting) return; e.currentTarget.style.background = 'rgba(255,255,255,0.09)'; e.currentTarget.style.color = 'rgba(255,255,255,0.85)'; }}
                       onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = 'rgba(255,255,255,0.62)'; }}
@@ -1818,66 +2064,7 @@ export function RoomConfigStudio({
                       type="button"
                       disabled={wizardSubmitting}
                       onClick={() => {
-                        void (async () => {
-                          setWizardSubmitError(null);
-                          const slots = uploadedImages
-                            .map((u, i) => ({ u, i }))
-                            .filter((x): x is { u: string; i: number } => x.u != null && x.u !== '');
-                          const blobUrls = slots.map((x) => x.u);
-                          const layoutIdx =
-                            selectedImage !== null && uploadedImages[selectedImage]
-                              ? slots.findIndex((s) => s.i === selectedImage)
-                              : 0;
-                          const safeLayout = layoutIdx >= 0 ? layoutIdx : 0;
-                          const configType = activeModal === 'external' ? 'external' : 'internal';
-                          const ctx =
-                            configType === 'external' ? externalRoomContext.trim() : internalRoomContext.trim();
-                          const notes = preferenceAdditionalNotes.trim();
-                          const arrangementPreferencesText =
-                            notes ||
-                            ctx ||
-                            'Create a practical component-based arrangement with balanced spacing and clear circulation.';
-                          const payload: RoomWizardCompletePayload = {
-                            blobUrls,
-                            configMode: selectedConfigMode,
-                            ...(selectedConfigMode === 'arrangement' ? { omitWizardStyleAndPalette: true } : {}),
-                            ...(preferenceReferenceImages.length > 0
-                              ? { referenceImageBlobUrls: preferenceReferenceImages }
-                              : {}),
-                            layoutIndex: safeLayout,
-                            style:
-                              selectedConfigMode === 'arrangement'
-                                ? ''
-                                : selectedRegionalStyle?.name ?? DEFAULT_REGIONAL_STYLE_NAME,
-                            paletteName: selectedConfigMode === 'arrangement' ? null : selectedPalette,
-                            configType,
-                            ...(selectedConfigMode === 'arrangement'
-                              ? {
-                                  arrangementConfig: {
-                                    existingComponentsNote:
-                                      'Preserve major existing components and spatial anchors from the selected layout image unless user preferences indicate changes.',
-                                    removedComponentsNote: '',
-                                    newComponentsNote:
-                                      preferenceReferenceImages.length > 0
-                                        ? 'Add new components inspired by the provided reference images where appropriate.'
-                                        : 'Add suitable components to complete the room arrangement.',
-                                    arrangementPreferencesText,
-                                  },
-                                }
-                              : {}),
-                            ...(ctx ? { roomContext: ctx } : {}),
-                            ...(notes ? { additionalNotes: notes } : {}),
-                          };
-                          setWizardSubmitting(true);
-                          try {
-                            await onComplete?.(payload);
-                            handleCloseModal();
-                          } catch (err) {
-                            setWizardSubmitError(err instanceof Error ? err.message : 'Generation failed. Check Next.js is running and try again.');
-                          } finally {
-                            setWizardSubmitting(false);
-                          }
-                        })();
+                        void submitPreferencesWizardRef.current();
                       }}
                       style={{ height: '40px', padding: '0 26px', borderRadius: '10px', background: wizardSubmitting ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.45)', border: '1.5px solid rgba(255,255,255,0.80)', boxShadow: '0px 0px 18px rgba(255,255,255,0.35), inset 0px 1px 2px rgba(255,255,255,0.08)', cursor: wizardSubmitting ? 'wait' : 'pointer', fontFamily: "'Inter', sans-serif", fontSize: '13px', fontWeight: 500, color: 'rgba(255,255,255,0.92)', transition: 'all 200ms ease' }}
                       onMouseEnter={e => { if (wizardSubmitting) return; e.currentTarget.style.boxShadow = '0px 0px 26px rgba(255,255,255,0.48), inset 0px 1px 2px rgba(255,255,255,0.08)'; }}

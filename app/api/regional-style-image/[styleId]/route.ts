@@ -40,22 +40,77 @@ function contentTypeFor(path: string): string {
   return 'image/jpeg'
 }
 
+type CachedImage = {
+  buffer: Buffer
+  contentType: string
+  etag: string
+}
+
+// Cache images in-memory to avoid repeated fs reads (fixes slow thumbnail grids).
+const IMAGE_CACHE = new Map<string, CachedImage>()
+
+function bufferToArrayBuffer(buf: Buffer): ArrayBuffer {
+  // Create a real ArrayBuffer copy (avoids SharedArrayBuffer typing issues).
+  const ab = new ArrayBuffer(buf.byteLength)
+  new Uint8Array(ab).set(buf)
+  return ab
+}
+
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ styleId: string }> }
 ) {
   const { styleId } = await context.params
-  const imagePath = STYLE_IMAGE_PATHS[styleId]
+  // Normalize id to avoid duplicate cache entries (e.g. casing).
+  const key = String(styleId).toLowerCase()
+  const imagePath = STYLE_IMAGE_PATHS[key]
   if (!imagePath) {
     return NextResponse.json({ error: 'Style image not found.' }, { status: 404 })
   }
 
   try {
-    const buffer = await fs.readFile(imagePath)
-    return new NextResponse(buffer, {
+    const cached = IMAGE_CACHE.get(key)
+    if (cached) {
+      const ifNoneMatch = request.headers.get('if-none-match')
+      if (ifNoneMatch && ifNoneMatch === cached.etag) {
+        return new NextResponse(null, {
+          status: 304,
+          headers: {
+            ETag: cached.etag,
+            'Cache-Control': 'public, max-age=31536000, immutable',
+          },
+        })
+      }
+      return new NextResponse(bufferToArrayBuffer(cached.buffer), {
+        headers: {
+          'Content-Type': cached.contentType,
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          ETag: cached.etag,
+        },
+      })
+    }
+
+    const [buffer, stat] = await Promise.all([fs.readFile(imagePath), fs.stat(imagePath)])
+    const contentType = contentTypeFor(imagePath)
+    const etag = `"${stat.size}-${Math.floor(stat.mtimeMs)}"`
+    IMAGE_CACHE.set(key, { buffer, contentType, etag })
+
+    const ifNoneMatch = request.headers.get('if-none-match')
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          ETag: etag,
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        },
+      })
+    }
+
+    return new NextResponse(bufferToArrayBuffer(buffer), {
       headers: {
-        'Content-Type': contentTypeFor(imagePath),
-        'Cache-Control': 'public, max-age=3600',
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        ETag: etag,
       },
     })
   } catch {

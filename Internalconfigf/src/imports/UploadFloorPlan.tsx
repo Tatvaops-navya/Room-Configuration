@@ -15,12 +15,7 @@ import { DEFAULT_REGIONAL_STYLE_NAME } from '../app/components/regionalDesignSty
 import { AppHeader } from '../app/components/AppHeader';
 import { AppSidebar } from '../app/components/AppSidebar';
 import { GenerationResults } from '../app/components/GenerationResults';
-import {
-  blobUrlToDataUrl,
-  postRoomGenerate,
-  type RoomWizardCompletePayload,
-  type RoomWizardSession,
-} from '../lib/roomGenerateApi';
+import { blobUrlToDataUrl, type RoomWizardCompletePayload, type RoomWizardSession } from '../lib/roomGenerateApi';
 import { applyWatermarkToImage } from '../lib/tatvaWatermark';
 import { buildApiUrl } from '../lib/apiUrl';
 
@@ -3398,46 +3393,12 @@ export default function UploadFloorPlan() {
                   setCurrentView('results');
                 }
 
-                const arrangementEmptyPrefs =
-                  payload.configMode === 'arrangement' &&
-                  !(payload.referenceImageBlobUrls?.length) &&
-                  !payload.additionalNotes?.trim();
-                setWizardSuppressInitialScan(arrangementEmptyPrefs);
-
-                const runId = ++wizardGenTokenRef.current;
-                setWizardApiPending(true);
+                // Never auto-call /api/generate when the wizard finishes. The upload stays as-is until the user
+                // taps Regenerate or runs Edit / Add / Replace / Erase (same expectation for purpose + arrangement).
+                setWizardApiPending(false);
                 setWizardApiError(null);
-                void (async () => {
-                  try {
-                    const data = await postRoomGenerate(room, room.style, room.paletteName, {});
-                    if (runId !== wizardGenTokenRef.current) return;
-                    if (data.error) {
-                      setWizardApiError(data.error);
-                      return;
-                    }
-                    if (!data.imageUrl) {
-                      setWizardApiError('No image returned from the server.');
-                      return;
-                    }
-                    setWizardApiError(null);
-                    setWizardServerWarning(data.warning?.trim() ?? null);
-                    const wm = await applyWatermarkToImage(data.imageUrl);
-                    if (runId !== wizardGenTokenRef.current) return;
-                    if (!suppressWizardInitialGenResultRef.current) {
-                      setGeneratedImageUrl(wm);
-                      setGeneratedImageRawUrl(data.imageUrl);
-                      appendGenerationHistory(wm, data.imageUrl);
-                    }
-                  } catch (e) {
-                    if (runId !== wizardGenTokenRef.current) return;
-                    setWizardApiError(e instanceof Error ? e.message : 'Generation failed.');
-                  } finally {
-                    if (runId === wizardGenTokenRef.current) {
-                      setWizardApiPending(false);
-                      setWizardSuppressInitialScan(false);
-                    }
-                  }
-                })();
+                setWizardServerWarning(null);
+                setWizardSuppressInitialScan(false);
               }}
             />
           </motion.div>

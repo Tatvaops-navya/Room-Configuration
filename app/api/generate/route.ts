@@ -5,10 +5,17 @@ import { compositeAddOutputOntoSource } from '@/app/lib/server/geminiInpaintMask
 
 /** Timeouts for Gemini API (ms). Image generation can take 60–120+ seconds. */
 const GEMINI_TEXT_TIMEOUT_MS = 120_000
-const GEMINI_IMAGE_TIMEOUT_MS = 180_000
 const GEMINI_RETRY_ATTEMPTS = 2
 const GEMINI_RETRY_DELAY_MS = 3000
-const DEFAULT_FALLBACK_IMAGE_MODEL = 'models/gemini-3.1-flash-preview'
+/** Must be an image-capable model id (e.g. `…-flash-image-preview`), not the text `…-flash-preview` id. */
+const DEFAULT_FALLBACK_IMAGE_MODEL = 'models/gemini-3.1-flash-image-preview'
+
+/** Align with `geminiInpaintMask` / `.env.example`; override via `GEMINI_IMAGE_TIMEOUT_MS` (60000–600000). */
+function resolveGenerateRouteGeminiImageTimeoutMs(): number {
+  const raw = Number(process.env.GEMINI_IMAGE_TIMEOUT_MS)
+  if (Number.isFinite(raw) && raw >= 60_000 && raw <= 600_000) return raw
+  return 300_000
+}
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': 'https://internalconfigf.vercel.app',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
@@ -159,6 +166,43 @@ function resolveFallbackImageModel(primaryImageModel: string): string | null {
   const normalizedCandidate = candidate.replace(/^models\//, '').trim()
   if (!normalizedCandidate || normalizedCandidate === normalizedPrimary) return null
   return normalizedCandidate
+}
+
+function normalizeGeminiModelId(model: string): string {
+  return model.replace(/^models\//, '').trim()
+}
+
+/**
+ * Gemini “Flash image” / image-generation model ids need explicit modalities or the API returns text-only.
+ * Pro image preview models work with temperature-only config.
+ */
+function eraseInpaintGenerationConfig(model: string): { temperature: number; responseModalities?: string[] } {
+  const m = normalizeGeminiModelId(model).toLowerCase()
+  const needsModalities =
+    m.includes('flash-image') || m.includes('image-generation') || m === 'gemini-2.5-flash-image'
+  if (needsModalities) {
+    return { temperature: 0, responseModalities: ['TEXT', 'IMAGE'] }
+  }
+  return { temperature: 0 }
+}
+
+const EXTRA_ERASE_INPAINT_FALLBACK_MODELS = [
+  'gemini-3.1-flash-image-preview',
+  'gemini-2.5-flash-image',
+  'gemini-2.0-flash-preview-image-generation',
+] as const
+
+function buildEraseInpaintModelChain(primaryImageModel: string): string[] {
+  const out: string[] = []
+  const push = (id: string) => {
+    const n = normalizeGeminiModelId(id)
+    if (n && !out.includes(n)) out.push(n)
+  }
+  push(primaryImageModel)
+  const fb = resolveFallbackImageModel(primaryImageModel)
+  if (fb) push(fb)
+  for (const m of EXTRA_ERASE_INPAINT_FALLBACK_MODELS) push(m)
+  return out
 }
 
 /**
@@ -1185,7 +1229,7 @@ RULES: Identical room structure (walls, floor, ceiling, doors, windows, dimensio
         const res = await fetchGemini(
           `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
-          GEMINI_IMAGE_TIMEOUT_MS
+          resolveGenerateRouteGeminiImageTimeoutMs()
         )
         if (!res.ok) {
           let errBody = ''
@@ -1526,8 +1570,11 @@ export async function POST(request: NextRequest) {
       // For style-only regenerate, preserve exact latest composition by using
       // the current generated frame as the sole structural source.
       imagesForGeneration = [currentResultTrimmed]
-    } else if (hasLayoutAnchor && currentResultTrimmed && currentResultTrimmed !== lockedLayoutImage && isCustomizationMode) {
-      imagesForGeneration = [lockedLayoutImage!, currentResultTrimmed]
+    } else if (isCustomizationMode && currentResultTrimmed) {
+      // Stacked edits (e.g. wall finish, then carpet): the latest frame already includes layout + prior work.
+      // Do NOT send [original wizard layout, current] — prompts call image 1 the "locked layout", which makes
+      // models revert walls/floors to the plain upload when applying the next override.
+      imagesForGeneration = [currentResultTrimmed]
     } else if (hasLayoutAnchor) {
       imagesForGeneration = [lockedLayoutImage!]
     } else if ((isCustomizationMode || isStyleOnlyReconfigure) && typeof currentResultImage === 'string') {
@@ -1625,6 +1672,7 @@ export async function POST(request: NextRequest) {
             '1) FIRST image: the full room photo (source).\n' +
             '2) SECOND image: a binary mask — pure WHITE pixels = editable area; pure BLACK = protected area.\n\n' +
             'TASK: Remove ALL movable room components visible inside the white region, including furniture and soft furnishings such as sofas, chairs, tables, beds, rugs/mats, curtains, decor accessories, and movable lighting fixtures. Fill the region so it looks like a clean empty room shell while preserving architecture and realism.\n\n' +
+            'EDGE-TO-EDGE (CRITICAL): The white mask covers the full photograph including every pixel along the left, right, top, and bottom borders and all corners. Remove partial objects, legs, rug corners, curtain edges, props, contact shadows, and reflections that sit on or touch those frame edges — not only the middle of the room. Do not leave thin strips or “halos” of old furniture along the perimeter.\n\n' +
             'HARD RULES:\n' +
             '- Preserve permanent architecture exactly: walls, floor, ceiling, doors, windows, fixed partitions, stair geometry, built-in structural elements.\n' +
             '- Do NOT change camera angle, perspective, framing, or global style.\n' +
@@ -1647,30 +1695,52 @@ export async function POST(request: NextRequest) {
             '- No text, logos, or labels in the output.\n\n' +
             'If in doubt, change fewer pixels — only inside white.'
         const primaryImageModel = process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview'
-        const fallbackImageModel = resolveFallbackImageModel(primaryImageModel)
         const roomImagePartsForErase = [{ inlineData: { data: sourceBuffer.toString('base64'), mimeType: sourceMime } }]
-        const inpaintingBody = JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                { text: inpaintingPrompt },
-                { inlineData: roomImagePartsForErase[0].inlineData },
-                { text: 'Mask (white = area to remove and fill seamlessly):' },
-                { inlineData: { data: maskB64, mimeType: 'image/png' } },
-              ],
-            },
-          ],
-          generationConfig: { temperature: 0 },
-        })
-        const res = await fetchGemini(
-          `https://generativelanguage.googleapis.com/v1beta/models/${primaryImageModel}:generateContent?key=${geminiApiKey}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: inpaintingBody },
-          GEMINI_IMAGE_TIMEOUT_MS
-        )
-        if (res.ok) {
+        const eraseContents = [
+          {
+            role: 'user' as const,
+            parts: [
+              { text: inpaintingPrompt },
+              { inlineData: roomImagePartsForErase[0].inlineData },
+              { text: 'Mask (white = area to remove and fill seamlessly):' },
+              { inlineData: { data: maskB64, mimeType: 'image/png' } },
+            ],
+          },
+        ]
+        const eraseModelChain = buildEraseInpaintModelChain(primaryImageModel)
+        const eraseImageTimeoutMs = resolveGenerateRouteGeminiImageTimeoutMs()
+
+        for (let i = 0; i < eraseModelChain.length; i++) {
+          const modelName = eraseModelChain[i]!
+          if (i > 0) {
+            console.warn(`Erase inpainting: trying fallback model ${modelName} (${i + 1}/${eraseModelChain.length}).`)
+          }
+          const inpaintingBody = JSON.stringify({
+            contents: eraseContents,
+            generationConfig: eraseInpaintGenerationConfig(modelName),
+          })
+          const res = await fetchGemini(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiApiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: inpaintingBody },
+            eraseImageTimeoutMs
+          )
+          if (!res.ok) {
+            let errBody = ''
+            try {
+              errBody = await res.text()
+            } catch {
+              /* ignore */
+            }
+            console.warn(
+              `Erase inpainting model ${modelName} HTTP ${res.status}:`,
+              errBody.slice(0, 900) || '(empty body)'
+            )
+            continue
+          }
           const data = await res.json()
-          const part = data.candidates?.[0]?.content?.parts?.find((p: { inlineData?: { data: string; mimeType?: string } }) => p.inlineData?.data)
+          const part = data.candidates?.[0]?.content?.parts?.find(
+            (p: { inlineData?: { data: string; mimeType?: string } }) => p.inlineData?.data
+          )
           if (part?.inlineData?.data) {
             const mime = part.inlineData.mimeType || 'image/png'
             let dataUrl = `data:${mime};base64,${part.inlineData.data}`
@@ -1678,27 +1748,16 @@ export async function POST(request: NextRequest) {
             dataUrl = await blendEraseToMask(dataUrl)
             return NextResponse.json({ imageUrl: dataUrl })
           }
-        }
-        if (fallbackImageModel) {
-          console.warn(`Erase inpainting: primary model failed, trying fallback ${fallbackImageModel}.`)
-          const res2 = await fetchGemini(
-            `https://generativelanguage.googleapis.com/v1beta/models/${fallbackImageModel}:generateContent?key=${geminiApiKey}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: inpaintingBody },
-            GEMINI_IMAGE_TIMEOUT_MS
+          const c0 = data.candidates?.[0]
+          const fr = c0?.finishReason ?? 'unknown'
+          const block = (data as { promptFeedback?: { blockReason?: string } }).promptFeedback?.blockReason
+          const textSnippet = c0?.content?.parts?.find((p: { text?: string }) => p.text)?.text
+          const apiErr = (data as { error?: { message?: string; code?: number } }).error
+          console.warn(
+            `Erase inpainting ${modelName} returned no image — finishReason: ${fr}${block ? `; promptBlock: ${block}` : ''}`,
+            apiErr ? `API error: ${JSON.stringify(apiErr)}` : '',
+            textSnippet ? `Model text: ${String(textSnippet).slice(0, 240)}` : ''
           )
-          if (res2.ok) {
-            const data = await res2.json()
-            const part = data.candidates?.[0]?.content?.parts?.find((p: { inlineData?: { data: string; mimeType?: string } }) => p.inlineData?.data)
-            if (part?.inlineData?.data) {
-              const mime = part.inlineData.mimeType || 'image/png'
-              let dataUrl = `data:${mime};base64,${part.inlineData.data}`
-              dataUrl = await ensureImageMatchesInputSize(dataUrl, roomImagePartsForErase)
-              dataUrl = await blendEraseToMask(dataUrl)
-              return NextResponse.json({ imageUrl: dataUrl })
-            }
-          }
-        } else {
-          console.warn('Erase inpainting: primary model failed and no distinct fallback model configured.')
         }
       } catch (err) {
         console.error('Erase inpainting failed:', err)
@@ -1794,13 +1853,12 @@ You receive ONE image below. This is the user's locked layout reference. Your ou
         prompt
     }
 
-    if (hasLayoutAnchor && (isCustomizationMode || isStyleOnlyReconfigure)) {
+    if (hasLayoutAnchor && isStyleOnlyReconfigure) {
       prompt =
         `GLOBAL LAYOUT LOCK (APPLIES TO THIS STEP TOO):
 - The FIRST image below is the permanently locked layout selected by the user in Step 2.
 - Keep this exact layout, geometry, and camera framing unchanged.
-- If a SECOND image is provided (current result), use it ONLY as a visual state reference for ongoing edits.
-- Never alter structure/framing away from the locked FIRST image.\n\n` + prompt
+- Never alter structure/framing away from that locked view.\n\n` + prompt
     }
 
     if (isCustomizationMode) {
