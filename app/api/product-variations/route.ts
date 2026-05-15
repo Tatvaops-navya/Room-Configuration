@@ -43,12 +43,28 @@ async function withSupabaseRetry<T>(
   )
 }
 
+/** Swadesh (and similar) CDNs often 403/block when the browser sends Referer from localhost; serve via same-origin proxy. */
+const CATALOG_IMAGE_PROXY_HOSTS = new Set(['cdn.swadeshonline.com'])
+
+function wrapCatalogImageForClient(sourceUrl: string | undefined): string | undefined {
+  if (!sourceUrl?.trim()) return undefined
+  const t = sourceUrl.trim()
+  if (!/^https:\/\//i.test(t)) return t
+  try {
+    const { hostname } = new URL(t)
+    if (!CATALOG_IMAGE_PROXY_HOSTS.has(hostname.toLowerCase())) return t
+    return `/api/catalog-image?url=${encodeURIComponent(t)}`
+  } catch {
+    return t
+  }
+}
+
 function mapTableDeskCatalogRow(row: Record<string, unknown>, kind: 'table' | 'desk' | 'decor' | 'cabinet' | 'dining') {
   const id = `${kind}_${row.id ?? ''}`
   const name = String(row.name ?? '')
   const desc = String(row.description ?? '').trim()
   const description = desc.length > 200 ? desc.slice(0, 197) + '...' : desc || name
-  const imagesUrlRaw = String(row.images_url ?? '')
+  const imagesUrlRaw = String(row.images_url ?? row.image_urls ?? row.image_url ?? '')
   const imageCandidates = imagesUrlRaw.split(/\s*\|\s*/).map((u) => u.trim()).filter(Boolean)
   const firstReal =
     imageCandidates.find((u) => !/dummy|placeholder/i.test(u)) ?? imageCandidates[0]
@@ -69,7 +85,7 @@ function mapTableDeskCatalogRow(row: Record<string, unknown>, kind: 'table' | 'd
     id,
     label,
     description,
-    imageUrl: firstImage || undefined,
+    imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
     material: genericName || materialType || undefined,
     texture: textureVal,
     category: cat || undefined,
@@ -233,7 +249,7 @@ export async function GET(request: NextRequest) {
             material: material || undefined,
             texture: texture || undefined,
             finish: finish || undefined,
-            imageUrl: imageUrl || undefined,
+            imageUrl: wrapCatalogImageForClient(imageUrl || undefined),
           }
         })
         return NextResponse.json(list)
@@ -364,7 +380,7 @@ export async function GET(request: NextRequest) {
             id,
             label,
             description,
-            imageUrl: firstImage || undefined,
+            imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
             material: genericName || materialType || undefined,
             texture: textureVal,
             category: bedCategory || undefined,
@@ -433,7 +449,7 @@ export async function GET(request: NextRequest) {
             id,
             label,
             description,
-            imageUrl: firstImage || undefined,
+            imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
             material: genericName || materialType || undefined,
             texture: textureVal,
             category: carpetCategory || undefined,
@@ -495,7 +511,7 @@ export async function GET(request: NextRequest) {
             id,
             label,
             description,
-            imageUrl: firstImage || undefined,
+            imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
             material: category || undefined,
             name: name || undefined,
             price: price ?? undefined,
@@ -544,7 +560,7 @@ export async function GET(request: NextRequest) {
             id,
             label,
             description,
-            imageUrl: firstImage || undefined,
+            imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
             material: genericName || materialType || undefined,
             texture: textureVal,
             category: sofaCategory || undefined,
@@ -614,7 +630,7 @@ export async function GET(request: NextRequest) {
             id,
             label,
             description,
-            imageUrl: firstImage || undefined,
+            imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
             material: genericName || materialType || undefined,
             texture: textureVal,
             category: chairCategory || undefined,
@@ -862,7 +878,7 @@ export async function GET(request: NextRequest) {
             id,
             label,
             description,
-            imageUrl: firstImage || undefined,
+            imageUrl: wrapCatalogImageForClient(firstImage ?? undefined),
             material: materialType || category || undefined,
             category: category || undefined,
             color: row.colour != null ? String(row.colour) : undefined,

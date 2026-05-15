@@ -331,9 +331,11 @@ function isFloorStandingAddElement(category?: string | null): boolean {
 
 /** Symmetric dilate + extra bottom height so the mask includes floor contact (avoids “half sofa” crops). */
 function growBoundingBoxForAddObject(box: EraseRegionNormalized, category?: string | null): EraseRegionNormalized {
-  const sym = dilateNormalizedRect(box, 0.1)
+  // Light growth: the user-defined capture box already sets intent; aggressive dilating
+  // expands editable rug/floor footprint and invites “wrong tile/rug paste” rectangles.
+  const sym = dilateNormalizedRect(box, 0.045)
   if (!isFloorStandingAddElement(category)) return sym
-  const dh = Math.min(0.34, Math.max(0.05, box.height * 0.26))
+  const dh = Math.min(0.2, Math.max(0.03, box.height * 0.15))
   const nh = Math.min(1 - sym.y, sym.height + dh)
   return { x: sym.x, y: sym.y, width: sym.width, height: Math.max(0.02, nh) }
 }
@@ -508,6 +510,11 @@ export type CreateMaskOptions = {
   outwardGrowRatio?: number
   /** Add-object: smart grow + extra bottom band for seating/tables so legs and seat deck stay inside the mask. */
   addObjectPlacementGrow?: boolean
+  /**
+   * After edge feather blur, restore a solid white core so compositing does not blend the original
+   * room back through the whole capture rectangle (ghosting / washed-out box).
+   */
+  solidCoreAfterFeather?: boolean
 }
 
 /**
@@ -563,8 +570,8 @@ export async function createMaskFromBoundingBox(
       let feather = options?.featherPx
       if (feather === undefined && options?.autoFeatherForAdd) {
         const m = Math.min(w, h)
-        // Thin feather: softens a hard rectangle without widening a band where cleanup/composite errors show.
-        feather = Math.max(3, Math.min(8, Math.round(m * 0.005)))
+        // Narrow feather: wide soft bands let the model redraw too much background and show as a patch.
+        feather = Math.max(2, Math.min(5, Math.round(m * 0.0035)))
       }
       if (feather != null && feather > 0) {
         const blur = Math.min(Math.round(feather), 64)
@@ -586,6 +593,18 @@ export async function createMaskFromBoundingBox(
         ctx.filter = `blur(${blur}px)`
         ctx.drawImage(temp, 0, 0)
         ctx.filter = 'none'
+        if (options?.solidCoreAfterFeather) {
+          const inset = Math.min(
+            Math.floor(Math.min(rw, rh) * 0.14),
+            Math.max(2, Math.ceil(blur * 2.5))
+          )
+          const ix = Math.min(x0 + inset, w - 1)
+          const iy = Math.min(y0 + inset, h - 1)
+          const iw = Math.max(1, Math.min(rw - 2 * inset, w - ix))
+          const ih = Math.max(1, Math.min(rh - 2 * inset, h - iy))
+          ctx.fillStyle = '#ffffff'
+          ctx.fillRect(ix, iy, iw, ih)
+        }
       }
 
       try {
@@ -616,8 +635,7 @@ export async function postRoomAdd(opts: {
     ref && ref.includes(',') && ref.length > 32 ? ref : undefined
   let res: Response
   try {
-    // Must use `/api/add` so the server runs `operation === 'add'` (native in-scene add prompt + checks).
-    // Posting to `/api/edit` only runs the generic inpaint brief and commonly fills the capture rectangle with flat gray/neutral patches.
+    // Must use `/api/add` — server runs masked inpaint with `operation: 'add'` (dedicated prompts + composite).
     res = await fetch(buildApiUrl('/api/add'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -626,6 +644,53 @@ export async function postRoomAdd(opts: {
         mask: opts.maskDataUrl,
         prompt,
         ...(referenceImage ? { referenceImage } : {}),
+      }),
+    })
+  } catch (e) {
+    const isNet =
+      e instanceof TypeError &&
+      (String(e.message).includes('fetch') ||
+        String(e.message).includes('Failed to fetch') ||
+        String(e.message).includes('NetworkError'))
+    return {
+      error: isNet
+        ? `Could not reach the room-configuration API. Start the Next.js app locally or set VITE_API_BASE_URL to your deployed backend. Current target: ${getApiBaseUrlHelpText()}.`
+        : e instanceof Error
+          ? e.message
+          : 'Request failed.',
+    }
+  }
+  const data = (await res.json().catch(() => ({}))) as { error?: string; success?: boolean; imageUrl?: string }
+  if (!res.ok) {
+    return { error: data.error || res.statusText || `Request failed (${res.status})` }
+  }
+  if (data.success && typeof data.imageUrl === 'string') {
+    return { imageUrl: data.imageUrl }
+  }
+  return { error: data.error || 'Invalid response from server' }
+}
+
+/**
+ * Masked inpaint erase — `POST /api/erase` (`operation === 'erase'` in `runGeminiMaskedInpaint`).
+ * White mask = remove and inpaint background; black = unchanged. Do not use `/api/edit` (replace) for erase.
+ */
+export async function postRoomEraseMask(opts: {
+  imageDataUrl: string
+  maskDataUrl: string
+  prompt?: string
+}): Promise<GenerateResponse> {
+  const prompt =
+    opts.prompt?.trim() ||
+    'Remove everything visible in the white masked region and inpaint plausible continuous background (wall, ceiling, floor, sky) matching the rest of the photograph.'
+  let res: Response
+  try {
+    res = await fetch(buildApiUrl('/api/erase'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: opts.imageDataUrl,
+        mask: opts.maskDataUrl,
+        prompt,
       }),
     })
   } catch (e) {
@@ -714,20 +779,25 @@ export async function postRoomReplace(opts: {
 /**
  * Convert a selection drawn as % of the image panel (0–100) to normalized erase coords for `object-fit: contain`
  * (matches how the room preview `<img>` is shown in Internalconfigf).
+ *
+ * `yAnchorRatio` must match `object-position` vertical letterboxing (0.5 = centered; mobile uses ~0.42 in the app).
  */
 export function capturePercentRectToEraseRegion(
   panelW: number,
   panelH: number,
   naturalW: number,
   naturalH: number,
-  rectPct: { x: number; y: number; w: number; h: number }
+  rectPct: { x: number; y: number; w: number; h: number },
+  options?: { yAnchorRatio?: number }
 ): EraseRegionNormalized | null {
   if (!naturalW || !naturalH || !panelW || !panelH) return null
   const scale = Math.min(panelW / naturalW, panelH / naturalH)
   const renderedW = naturalW * scale
   const renderedH = naturalH * scale
-  const offsetX = (panelW - renderedW) / 2
-  const offsetY = (panelH - renderedH) / 2
+  const offsetX = Math.max(0, (panelW - renderedW) / 2)
+  const freeY = Math.max(0, panelH - renderedH)
+  const anchor = Math.max(0, Math.min(1, options?.yAnchorRatio ?? 0.5))
+  const offsetY = freeY * anchor
   const left = (rectPct.x / 100) * panelW
   const top = (rectPct.y / 100) * panelH
   const pw = (rectPct.w / 100) * panelW
@@ -779,6 +849,24 @@ export async function ensureGenerateImageDataUrl(src: string): Promise<string | 
         error:
           'Could not convert image to data URL. Erase needs a wizard upload or an AI-generated result (data URL).',
       }
+    }
+  }
+  /** Same-origin catalog thumbnails (e.g. `/api/catalog-image?url=…` from product-variations). */
+  if (s.startsWith('/api/')) {
+    try {
+      const res = await fetch(buildApiUrl(s))
+      if (!res.ok) {
+        return { error: 'Could not load catalog image.' }
+      }
+      const blob = await res.blob()
+      return await new Promise<string>((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(r.result as string)
+        r.onerror = () => reject(new Error('read failed'))
+        r.readAsDataURL(blob)
+      })
+    } catch {
+      return { error: 'Could not read catalog image.' }
     }
   }
   return { error: 'Invalid image for erase.' }

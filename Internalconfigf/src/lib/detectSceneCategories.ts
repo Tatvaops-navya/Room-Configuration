@@ -139,11 +139,11 @@ export function buildObjectCategoriesFromDetection(
 export const OBJECT_CATEGORY_THUMB_URLS: Record<string, string> = {
   Wall: 'https://images.unsplash.com/photo-1767467961045-60e4294e0c7f?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
   Floor: 'https://images.unsplash.com/photo-1676789403751-cb4381fff88e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
-  Carpet: 'https://images.unsplash.com/photo-1600166898405-3aad6191b57b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
+  Carpet: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=120&q=80&auto=format&fit=crop',
   Ceiling: 'https://images.unsplash.com/photo-1550932372-3080d57e4e74?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
   Sofa: 'https://images.unsplash.com/photo-1768946052273-0a2dd7f3e365?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
   Bed: 'https://images.unsplash.com/photo-1631049307264-da0ec9d70304?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
-  Mattress: 'https://images.unsplash.com/photo-1586105251267-7a3e36e50d43?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
+  Mattress: 'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?w=120&q=80&auto=format&fit=crop',
   Chair: 'https://images.unsplash.com/photo-1760716478125-aa948e99ef85?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
   Desk: 'https://images.unsplash.com/photo-1772761482020-3cea792b5de7?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',
   Table: 'https://images.unsplash.com/photo-1539624831128-04618668ce81?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&w=80',

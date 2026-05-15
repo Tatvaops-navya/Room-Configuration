@@ -15,7 +15,12 @@ import { DEFAULT_REGIONAL_STYLE_NAME } from '../app/components/regionalDesignSty
 import { AppHeader } from '../app/components/AppHeader';
 import { AppSidebar } from '../app/components/AppSidebar';
 import { GenerationResults } from '../app/components/GenerationResults';
-import { blobUrlToDataUrl, type RoomWizardCompletePayload, type RoomWizardSession } from '../lib/roomGenerateApi';
+import {
+  blobUrlToDataUrl,
+  postRoomGenerate,
+  type RoomWizardCompletePayload,
+  type RoomWizardSession,
+} from '../lib/roomGenerateApi';
 import { applyWatermarkToImage } from '../lib/tatvaWatermark';
 import { buildApiUrl } from '../lib/apiUrl';
 
@@ -3393,12 +3398,49 @@ export default function UploadFloorPlan() {
                   setCurrentView('results');
                 }
 
-                // Never auto-call /api/generate when the wizard finishes. The upload stays as-is until the user
-                // taps Regenerate or runs Edit / Add / Replace / Erase (same expectation for purpose + arrangement).
-                setWizardApiPending(false);
-                setWizardApiError(null);
-                setWizardServerWarning(null);
-                setWizardSuppressInitialScan(false);
+                // Full-room (purpose): auto-generate once so style + palette from the wizard apply to the upload.
+                // Custom Room Components (arrangement): no auto-generate — upload stays raw until Edit/Add/Replace/Erase.
+                if (arrangementFlow) {
+                  setWizardApiPending(false);
+                  setWizardApiError(null);
+                  setWizardServerWarning(null);
+                  setWizardSuppressInitialScan(false);
+                } else {
+                  const runId = ++wizardGenTokenRef.current;
+                  setWizardApiPending(true);
+                  setWizardApiError(null);
+                  void (async () => {
+                    try {
+                      const data = await postRoomGenerate(room, room.style, room.paletteName, {});
+                      if (runId !== wizardGenTokenRef.current) return;
+                      if (data.error) {
+                        setWizardApiError(data.error);
+                        return;
+                      }
+                      if (!data.imageUrl) {
+                        setWizardApiError('No image returned from the server.');
+                        return;
+                      }
+                      setWizardApiError(null);
+                      setWizardServerWarning(data.warning?.trim() ?? null);
+                      const wm = await applyWatermarkToImage(data.imageUrl);
+                      if (runId !== wizardGenTokenRef.current) return;
+                      if (!suppressWizardInitialGenResultRef.current) {
+                        setGeneratedImageUrl(wm);
+                        setGeneratedImageRawUrl(data.imageUrl);
+                        appendGenerationHistory(wm, data.imageUrl);
+                      }
+                    } catch (e) {
+                      if (runId !== wizardGenTokenRef.current) return;
+                      setWizardApiError(e instanceof Error ? e.message : 'Generation failed.');
+                    } finally {
+                      if (runId === wizardGenTokenRef.current) {
+                        setWizardApiPending(false);
+                        setWizardSuppressInitialScan(false);
+                      }
+                    }
+                  })();
+                }
               }}
             />
           </motion.div>
@@ -3472,7 +3514,7 @@ export default function UploadFloorPlan() {
                   ? 'absolute left-0 right-0 top-[48px] bottom-0 z-[1]'
                   : 'absolute left-[127px] top-[78px] w-[1289px] h-[657px] z-[1]'
               }
-              style={isMobileHome ? { padding: '8px 8px 10px', overflow: 'hidden' } : { overflow: 'visible' }}
+              style={isMobileHome ? { padding: '8px 8px 10px', overflow: 'hidden', minHeight: 0, height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' } : { overflow: 'visible' }}
             >
               <GenerationResults
                 selectedImageUrl={selectedImageUrl}

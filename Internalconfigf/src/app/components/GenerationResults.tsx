@@ -3,6 +3,7 @@ import {
   postRoomGenerate,
   postCustomizationGenerate,
   postRoomErase,
+  postRoomEraseMask,
   postRoomAdd,
   postRoomReplace,
   buildReplaceWithPhrase,
@@ -33,6 +34,7 @@ import {
   type DecorCatalogItem,
 } from '../../lib/decorProductsApi';
 import {
+  ALL_OBJECT_CATEGORY_LABELS,
   buildObjectCategoriesFromDetection,
   OBJECT_CATEGORY_THUMB_URLS,
   postDetectScene,
@@ -68,6 +70,18 @@ const PLACEHOLDER_ROOM_IMAGE =
   stylePreviewUrl(DEFAULT_REGIONAL_STYLE_NAME) ??
   REGIONAL_STYLES[0]?.img ??
   'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=1600&q=80';
+
+/** Left/right rail lists: without minHeight:0 + flex-basis 0, nested overflowY:auto often never scrolls on mobile WebKit. */
+const RAIL_SCROLL_FLEX_COLUMN: React.CSSProperties = {
+  flex: '1 1 0%',
+  minHeight: 0,
+  overflowY: 'auto',
+  display: 'flex',
+  flexDirection: 'column',
+  WebkitOverflowScrolling: 'touch',
+  touchAction: 'pan-y',
+  overscrollBehavior: 'contain',
+};
 
 // ── SVG Icon Components (from Figma svg paths) ─────────────────────────────
 function IconRegenerate() {
@@ -180,8 +194,8 @@ function capturePercentRectToEraseRegion(
   const scale = Math.min(panelW / naturalW, panelH / naturalH);
   const renderedW = naturalW * scale;
   const renderedH = naturalH * scale;
-  const offsetX = (panelW - renderedW) / 2;
-  const freeY = panelH - renderedH;
+  const offsetX = Math.max(0, (panelW - renderedW) / 2);
+  const freeY = Math.max(0, panelH - renderedH);
   const anchor = Math.max(0, Math.min(1, options?.yAnchorRatio ?? 0.5));
   const offsetY = freeY * anchor;
   const left = (rectPct.x / 100) * panelW;
@@ -351,6 +365,8 @@ const STRICT_PROMPT_OBJECT_RULES = [
   'Output must be one realistic component with correct proportions, placed only inside the selected mask area.',
 ].join(' ');
 const MOBILE_IMAGE_Y_ANCHOR = 0.42;
+/** Reserve space above fixed Imagine tab bar (min-h 54 + padding + safe area). */
+const MOBILE_BOTTOM_NAV_CLEARANCE = 'calc(88px + env(safe-area-inset-bottom, 0px))';
 
 function buildStrictPromptObjectInstruction(userInput: string): string {
   const trimmed = userInput.trim();
@@ -1737,10 +1753,14 @@ export function GenerationResults({
     setShowWatermark(true);
   }, [generatedImageUrl]);
 
-  const objectCategoryList = useMemo(
-    () => buildObjectCategoriesFromDetection(sceneRoomType, sceneComponents),
-    [sceneRoomType, sceneComponents],
-  );
+  const objectCategoryList = useMemo(() => {
+    const built = buildObjectCategoriesFromDetection(sceneRoomType, sceneComponents)
+    const out = [...built]
+    for (const lab of ALL_OBJECT_CATEGORY_LABELS) {
+      if (!out.includes(lab)) out.push(lab)
+    }
+    return out
+  }, [sceneRoomType, sceneComponents]);
 
   useEffect(() => {
     if (!isCustomisation) return;
@@ -2419,12 +2439,18 @@ export function GenerationResults({
       'Preserve floor tile/grout/pattern, rug threads, window glass, bars, door openings, and wall texture anywhere they remain visible—not a uniform flat color slab inside the rectangular selection.';
     const addCompleteObjectRule =
       'Add one complete, intact object: for a sofa include seat, cushions, back, base/skirt/legs, and solid floor contact—never only the top backrest strip or a floating crop. Scale so the whole piece fits in the box with margin; no flush horizontal slice above the floor.';
+    const addFullRegionRepaintRule =
+      'Fully repaint the entire selected capture rectangle as one scene—do not paste the object on top of the unchanged window/floor/wall; no visible rectangular overlay, washed-out box, or background showing through the furniture.';
+    const addSolidSilhouetteRule =
+      'The added object must look physically solid and fully opaque—no foggy or soft “sticker” edge, no milky haze or white cast under it or on the floor, no horizontal blur smear on glossy tile, no semitransparent blend over window bars or walls; crisp material boundaries and a single soft contact shadow grounded in the real floor plane with continuous grout and reflections.';
     const prompt = [
       `Change only the selected area (${verticalRegion}-${horizontalRegion}) in this interior photo to add: ${addIntent || 'one suitable object'}.`,
       'Keep every other surface, object, layout, and lighting unchanged.',
       placementGuardrail,
       addIntegrationRule,
       addCompleteObjectRule,
+      addFullRegionRepaintRule,
+      addSolidSilhouetteRule,
       'Maintain the same camera, geometry, and scene composition; edit only inside the selected mask.',
       'Photorealistic, seamless blend with natural contact shadows and correct perspective.',
     ].join(' ');
@@ -2454,6 +2480,7 @@ export function GenerationResults({
       expandGlobalSurface: false,
       addObjectPlacementGrow: true,
       autoFeatherForAdd: true,
+      solidCoreAfterFeather: true,
     });
     if (!maskDataUrl) {
       setApiError('Could not build the selection mask. Try again.');
@@ -2506,6 +2533,7 @@ export function GenerationResults({
             prompt,
             'RETRY REQUIRED: prior output is invalid.',
             'Place one clearly visible, complete 3D object strictly inside the selected mask — entire silhouette (e.g. full sofa width, both arms); scale down if needed so nothing is cropped at the mask edge.',
+            'Fully repaint the whole capture rectangle — no washed-out box, no original window/floor/wall visible through or around the object (no ghosting).',
             'Forbidden: solid-color billboard over floor/window tiles, sticker-like rectangle, pastel mat replacing real grout/pattern/glazing.',
             'Where floor or doorway/window pixels show inside the capture box, continue the exact same tiling/grille/daylight—not full-bleed object color.',
             'Ensure natural object shading and shadows while keeping all outside-mask pixels unchanged.',
@@ -2559,6 +2587,8 @@ export function GenerationResults({
     generatePromptText,
     generatedPreviewUrl,
     generatedImageUrl,
+    generatedImageRawUrl,
+    isMobile,
     apiResultImageUrl,
     resetAddObjectState,
     onGenerationHistoryAppend,
@@ -2981,10 +3011,9 @@ export function GenerationResults({
     try {
       const data = !useFullComponentsErase
         ? await (async () => {
-            // Erase should behave like robust edit workflow: slightly expand around selection
-            // so object edges/shadows are fully removed in one pass.
+            // Expand selection so thin objects (fixtures, cords, glow) sit fully inside the white mask.
             const expandedEraseRegion = (() => {
-              const grow = 0.24;
+              const grow = 0.3;
               const x = Math.max(0, eraseRegion.x - eraseRegion.width * grow);
               const y = Math.max(0, eraseRegion.y - eraseRegion.height * grow);
               const r = Math.min(1, eraseRegion.x + eraseRegion.width * (1 + grow));
@@ -2996,20 +3025,22 @@ export function GenerationResults({
                 height: Math.max(0.02, b - y),
               };
             })();
+            // Crisp mask: server composites erase with `hardMask: true` (luma ≥ 0.5 ⇒ use model output).
+            // Feathered masks leave much of the region below threshold so the composite keeps the original object.
             const eraseMaskDataUrl = await createMaskFromBoundingBox(dataUrlResult, expandedEraseRegion, {
               expandGlobalSurface: false,
+              featherPx: 0,
             });
             if (!eraseMaskDataUrl) {
               return { error: 'Could not build the selection mask. Try again.' };
             }
             const erasePrompt = [
-              'STRICT MASK ERASE: remove all visible objects/content inside the white mask and reconstruct only plausible room background.',
-              'Boundary lock: edits must remain 100% inside the mask; do not change any pixel outside the mask.',
-              'Do not add new furniture/decor/textures that are not natural continuation of surrounding wall/floor/rug.',
-              'Keep perspective, lighting, and texture continuity at mask edges with a seamless blend.',
-              'Hard requirement: fully remove object remnants, shadows, reflections, and contact marks inside mask.',
+              'ERASE (remove only): Inside the white mask, completely remove every visible object — furniture, lighting fixtures, pendants, chains, cables, frames, plants, decor, and their shadows, reflections, glow, and contact marks on wall/floor/ceiling.',
+              'Inpaint only plausible continuation of the existing room background (same wallpaper, paint, plaster, tiles, wood, sky through windows) so the result looks like nothing was ever there.',
+              'Do not add replacement objects or new decor. Do not change any pixel outside the mask.',
+              'Match lighting, grain, and perspective at the mask boundary; no hard cut line, no white or gray flat slab.',
             ].join(' ');
-            let firstPass = await postRoomReplace({
+            let firstPass = await postRoomEraseMask({
               imageDataUrl: dataUrlResult,
               maskDataUrl: eraseMaskDataUrl,
               prompt: erasePrompt,
@@ -3024,20 +3055,18 @@ export function GenerationResults({
             );
             const needsSecondPass =
               !eraseMetrics ||
-              eraseMetrics.meanDiff < 10 ||
-              eraseMetrics.changedRatio < 0.12 ||
+              eraseMetrics.meanDiff < 14 ||
+              eraseMetrics.changedRatio < 0.1 ||
               (eraseMetrics.whiteRatio > 0.38 && eraseMetrics.variance < 170);
             if (!needsSecondPass) {
               return firstPass;
             }
             const secondPassPrompt = [
               erasePrompt,
-              'SECOND PASS REQUIRED: previous erase is incomplete.',
-              'Fully inpaint remaining subject traces in masked region and produce clean continuous background.',
-              'No ghosting, no leftover object fragments, no white/flat patch.',
+              'SECOND PASS — previous result still shows traces inside the mask: remove every remaining wire, bulb, metal arm, highlight, and shadow from the deleted object; extend wall/ceiling/floor texture naturally until the region is clean.',
             ].join(' ');
-            firstPass = await postRoomReplace({
-              imageDataUrl: firstPass.imageUrl,
+            firstPass = await postRoomEraseMask({
+              imageDataUrl: dataUrlResult,
               maskDataUrl: eraseMaskDataUrl,
               prompt: secondPassPrompt,
             });
@@ -3083,7 +3112,9 @@ export function GenerationResults({
     apiGenerating,
     isCustomComponentConfiguration,
     selectedAction,
+    isMobile,
     generatedImageUrl,
+    generatedImageRawUrl,
     apiResultImageUrl,
     onGeneratedImage,
     onGenerationHistoryAppend,
@@ -3357,6 +3388,9 @@ export function GenerationResults({
         flexDirection:  'row',
         width:          '100%',
         height:         '100%',
+        flex:           isCustomisation ? 1 : undefined,
+        minHeight:      isCustomisation ? 0 : undefined,
+        minWidth:       isCustomisation ? 0 : undefined,
         gap:            isMobile ? '0px' : '12px',
         fontFamily:     "'Inter', sans-serif",
         overflow:       isCustomisation ? 'visible' : 'hidden',
@@ -3489,6 +3523,7 @@ export function GenerationResults({
           width:                leftHistoryRailWidth,
           flexShrink:           0,
           minWidth:             0,
+          minHeight:            0,
           height:               '100%',
           background:           'rgba(0,0,0,0.22)',
           borderRadius:         '16px',
@@ -3503,12 +3538,21 @@ export function GenerationResults({
           position:             isMobile ? 'absolute' : 'relative',
           left:                 isMobile ? '0px' : undefined,
           top:                  isMobile ? '0px' : undefined,
-          bottom:               isMobile ? '0px' : undefined,
+          // Match right tools panel: reserve space above bottom nav (Imagine tab bar) so full category list scrolls.
+          bottom:               isMobile ? MOBILE_BOTTOM_NAV_CLEARANCE : undefined,
           zIndex:               isMobile ? 55 : undefined,
         }}
       >
         {showEditSwitchers ? (
-          <>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
             {/* Left panel switcher */}
             <div style={{ padding: '12px 16px 0', borderBottom: '0.5px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'row', flexShrink: 0, transition: 'opacity 300ms ease' }}>
               {customActiveTab === 'Erase' ? (
@@ -3551,7 +3595,14 @@ export function GenerationResults({
               )}
             </div>
             {leftPanelTab === 'History' ? (
-              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 20px 16px', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
+              <div
+                style={{
+                  ...RAIL_SCROLL_FLEX_COLUMN,
+                  padding: isMobile ? '8px 20px 20px' : '8px 20px 16px',
+                  gap: '12px',
+                  alignItems: 'center',
+                }}
+              >
                 {generationHistory.length > 0 && (
                   <div
                     style={{
@@ -3571,7 +3622,7 @@ export function GenerationResults({
               </div>
             ) : customActiveTab === 'Erase' && eraseLeftTab === 'Objects' ? (
               <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                <div style={RAIL_SCROLL_FLEX_COLUMN}>
                   {/* Capture Area Action - only if not locked */}
                   {!captureLocked && (
                     <div
@@ -3690,7 +3741,14 @@ export function GenerationResults({
                 </div>
               </div>
             ) : customActiveTab === 'Edit' ? (
-              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+              <div
+                style={
+                  {
+                    ...RAIL_SCROLL_FLEX_COLUMN,
+                    paddingBottom: isMobile ? 120 : 0,
+                  } as React.CSSProperties
+                }
+              >
                 {sceneDetectLoading && (
                   <div style={{ padding: '10px 16px', fontSize: '11px', color: 'rgba(255,255,255,0.45)', fontFamily: "'Inter', sans-serif" }}>
                     Scanning room image for categories…
@@ -3720,7 +3778,7 @@ export function GenerationResults({
                     >
                       {isSel && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: '#ffffff' }} />}
                       <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, overflow: 'hidden' }}>
-                        <img src={thumb} alt={cat} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        <img src={thumb} alt={cat} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                       </div>
                       <span style={{ marginLeft: 12 }}>{cat}</span>
                     </div>
@@ -3728,7 +3786,14 @@ export function GenerationResults({
                 })}
               </div>
             ) : customActiveTab === 'Add Object' ? (
-              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+              <div
+                style={
+                  {
+                    ...RAIL_SCROLL_FLEX_COLUMN,
+                    paddingBottom: isMobile ? 120 : 0,
+                  } as React.CSSProperties
+                }
+              >
                 {!isMobile && (
                   <div
                     onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
@@ -3787,7 +3852,7 @@ export function GenerationResults({
                     >
                       {isSel && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: '#ffffff' }} />}
                       <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, overflow: 'hidden' }}>
-                        <img src={thumb} alt={cat} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        <img src={thumb} alt={cat} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                       </div>
                       <span style={{ marginLeft: 12 }}>{cat}</span>
                     </div>
@@ -3795,7 +3860,14 @@ export function GenerationResults({
                 })}
               </div>
             ) : customActiveTab === 'Replace' ? (
-              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+              <div
+                style={
+                  {
+                    ...RAIL_SCROLL_FLEX_COLUMN,
+                    paddingBottom: isMobile ? 120 : 0,
+                  } as React.CSSProperties
+                }
+              >
                 {!isMobile && (
                   <div
                     onClick={() => setSelectedAction(selectedAction === 'capture' ? null : 'capture')}
@@ -3854,7 +3926,7 @@ export function GenerationResults({
                     >
                       {isSel && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: '#ffffff' }} />}
                       <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(255,255,255,0.08)', flexShrink: 0, overflow: 'hidden' }}>
-                        <img src={thumb} alt={cat} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        <img src={thumb} alt={cat} referrerPolicy="no-referrer" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                       </div>
                       <span style={{ marginLeft: 12 }}>{cat}</span>
                     </div>
@@ -3862,7 +3934,7 @@ export function GenerationResults({
                 })}
               </div>
             ) : customActiveTab === 'Erase' && eraseLeftTab !== 'History' ? (
-              <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ ...RAIL_SCROLL_FLEX_COLUMN, padding: '12px 16px', gap: 16 }}>
                 {([
                   { id: 'capture', title: 'Capture Area', desc: 'Draw a selection to define the area you want to erase from the image.', icon: (
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5V3.5C2 2.67 2.67 2 3.5 2H5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M11 2H12.5C13.33 2 14 2.67 14 3.5V5" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M14 11V12.5C14 13.33 13.33 14 12.5 14H11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 14H3.5C2.67 14 2 13.33 2 12.5V11" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5" y="5" width="6" height="6" rx="0.5" stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 1.5"/></svg>
@@ -3899,7 +3971,7 @@ export function GenerationResults({
             ) : (
               <div style={{ flex: 1 }} />
             )}
-          </>
+          </div>
         ) : historyRailCollapsed ? (
           <button
             type="button"
@@ -4873,7 +4945,9 @@ export function GenerationResults({
               title="Create 360° room tour video"
               style={{
                 position: 'absolute',
-                right: 14,
+                // Mobile + customisation: leave horizontal room for the global support FAB
+                // (UploadFloorPlan fixed ~right-12, ~64px) so the pill and headset do not overlap.
+                right: isMobile && isCustomisation ? 96 : 14,
                 bottom: isMobile && isCustomisation ? 84 : 14,
                 zIndex: isMobile && isCustomisation ? 10001 : 48,
                 display: 'flex',
@@ -4953,7 +5027,7 @@ export function GenerationResults({
           zIndex:               isMobile ? 56 : undefined,
           right:                isMobile ? '0px' : undefined,
           top:                  isMobile ? '0px' : undefined,
-          bottom:               isMobile ? '74px' : undefined,
+          bottom:               isMobile ? MOBILE_BOTTOM_NAV_CLEARANCE : undefined,
           position:             isMobile ? 'absolute' : 'relative',
         }}
       >
@@ -4980,7 +5054,19 @@ export function GenerationResults({
           </button>
         )}
         {isCustomisation && customActiveTab === 'Add Object' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: "'Inter', sans-serif", position: 'relative' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              flex: 1,
+              minHeight: 0,
+              height: '100%',
+              width: '100%',
+              fontFamily: "'Inter', sans-serif",
+              position: 'relative',
+            }}
+          >
+            <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>
             {/* Uploaded Component panel */}
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'clip', background: 'rgba(0,0,0,0.22)', zIndex: 3, opacity: addObjectSubPanel === 'uploadedComponent' ? 1 : 0, transform: addObjectSubPanel === 'uploadedComponent' ? 'translateX(0)' : 'translateX(100%)', transition: 'opacity 250ms ease, transform 250ms ease', pointerEvents: addObjectSubPanel === 'uploadedComponent' ? 'auto' : 'none' }}>
               <div style={{ padding: '16px 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -5153,7 +5239,7 @@ export function GenerationResults({
               </div>
             </div>
             {/* Add Object — same Style / Colour / Material flow as Edit (category chosen on the left) */}
-            <div style={{ position: 'absolute', inset: 0, zIndex: 1, display: 'flex', flexDirection: 'column', opacity: addObjectSubPanel === null ? 1 : 0, pointerEvents: addObjectSubPanel === null ? 'auto' : 'none', transition: 'opacity 250ms ease' }}>
+            <div style={{ position: 'absolute', inset: 0, zIndex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', opacity: addObjectSubPanel === null ? 1 : 0, pointerEvents: addObjectSubPanel === null ? 'auto' : 'none', transition: 'opacity 250ms ease' }}>
               <div style={{ padding: '12px 16px 0', borderBottom: '0.5px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'row', flexShrink: 0 }}>
                 {(['Style', 'Colour', 'Material'] as const).map((tab) => {
                   const isActive = addPanelTab === tab;
@@ -5171,7 +5257,14 @@ export function GenerationResults({
                   );
                 })}
               </div>
-              <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              <div
+                style={
+                  {
+                    ...RAIL_SCROLL_FLEX_COLUMN,
+                    paddingBottom: isMobile ? 140 : 16,
+                  } as React.CSSProperties
+                }
+              >
                 {addPanelTab === 'Style' && addSelectedCategory ? (
                   <div>
                     <div style={{ padding: '12px 16px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
@@ -5471,11 +5564,24 @@ export function GenerationResults({
                 </button>
               </div>
             </div>
+            </div>
           </div>
         ) : isCustomisation && customActiveTab === 'Replace' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: "'Inter', sans-serif", position: 'relative' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              flex: 1,
+              minHeight: 0,
+              height: '100%',
+              width: '100%',
+              fontFamily: "'Inter', sans-serif",
+              position: 'relative',
+            }}
+          >
+            <div style={{ flex: 1, minHeight: 0, position: 'relative', width: '100%' }}>
             {/* Replace — Style / Colour / Material (mirrors Add Object) */}
-            <div style={{ position: 'absolute', inset: 0, zIndex: 1, display: 'flex', flexDirection: 'column', opacity: replaceSubPanel === null ? 1 : 0, pointerEvents: replaceSubPanel === null ? 'auto' : 'none', transition: 'opacity 250ms ease' }}>
+            <div style={{ position: 'absolute', inset: 0, zIndex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', opacity: replaceSubPanel === null ? 1 : 0, pointerEvents: replaceSubPanel === null ? 'auto' : 'none', transition: 'opacity 250ms ease' }}>
               <div style={{ padding: '12px 16px 0', borderBottom: '0.5px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'row', flexShrink: 0 }}>
                 {(['Style', 'Colour', 'Material'] as const).map((tab) => {
                   const isActive = replacePanelTab === tab;
@@ -5493,7 +5599,14 @@ export function GenerationResults({
                   );
                 })}
               </div>
-              <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              <div
+                style={
+                  {
+                    ...RAIL_SCROLL_FLEX_COLUMN,
+                    paddingBottom: isMobile ? 140 : 16,
+                  } as React.CSSProperties
+                }
+              >
                 {replacePanelTab === 'Style' && replaceSelectedCategory ? (
                   <div>
                     <div style={{ padding: '12px 16px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
@@ -5938,11 +6051,33 @@ export function GenerationResults({
                 )}
               </div>
             </div>
+            </div>
           </div>
         ) : isCustomisation ? (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+          <div
+            style={
+              isMobile
+                ? {
+                    display: 'grid',
+                    gridTemplateRows: 'auto minmax(0, 1fr) auto',
+                    flex: 1,
+                    minHeight: 0,
+                    height: '100%',
+                    width: '100%',
+                    overflow: 'hidden',
+                  }
+                : {
+                    display: 'flex',
+                    flexDirection: 'column',
+                    flex: 1,
+                    minHeight: 0,
+                    height: '100%',
+                    width: '100%',
+                  }
+            }
+          >
             {/* Tab switcher */}
-            <div style={{ padding: '12px 16px 0', borderBottom: '0.5px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'row' }}>
+            <div style={{ padding: '12px 16px 0', borderBottom: '0.5px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'row', flexShrink: 0 }}>
               {(['Style', 'Colour', 'Material'] as const).map(tab => {
                 const isActive = customPanelTab === tab;
                 return (
@@ -5976,8 +6111,16 @@ export function GenerationResults({
                 );
               })}
             </div>
-            {/* Content area */}
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            {/* Content area — scrolls; confirm row stays in grid row 3 on mobile */}
+            <div
+              style={
+                {
+                  ...RAIL_SCROLL_FLEX_COLUMN,
+                  minHeight: 0,
+                  paddingBottom: isMobile ? 8 : 12,
+                } as React.CSSProperties
+              }
+            >
               {customPanelTab === 'Style' && selectedCategory ? (
                 <div style={{ fontFamily: "'Inter', sans-serif" }}>
                   <div style={{ padding: '12px 16px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>
@@ -6154,17 +6297,17 @@ export function GenerationResults({
             {/* Confirm Customisation button (Edit → catalog / style / colour / material) */}
             <div
               style={{
-                padding: isMobile
-                  ? '10px 16px calc(12px + env(safe-area-inset-bottom, 0px))'
-                  : '12px 16px 16px',
+                padding: isMobile ? '10px 16px 12px' : '12px 16px 16px',
                 flexShrink: 0,
-                position: 'sticky',
-                bottom: 0,
-                zIndex: isMobile ? 62 : 4,
-                background:
-                  'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 28%, rgba(0,0,0,0.78) 100%)',
-                backdropFilter: isMobile ? 'blur(6px)' : undefined,
-                WebkitBackdropFilter: isMobile ? 'blur(6px)' : undefined,
+                position: isMobile ? 'relative' : 'sticky',
+                bottom: isMobile ? undefined : 0,
+                zIndex: isMobile ? 65 : 4,
+                background: isMobile
+                  ? 'rgba(0,0,0,0.92)'
+                  : 'linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 28%, rgba(0,0,0,0.78) 100%)',
+                borderTop: isMobile ? '1px solid rgba(255,255,255,0.12)' : undefined,
+                backdropFilter: isMobile ? 'blur(10px)' : undefined,
+                WebkitBackdropFilter: isMobile ? 'blur(10px)' : undefined,
               }}
             >
               <button
